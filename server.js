@@ -4,6 +4,7 @@ const app = express();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
 // CORS — allow everything
 app.use((req, res, next) => {
@@ -46,7 +47,7 @@ app.use('/tradier', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('OptionsAI proxy is running ✅'));
+app.get('/', (req, res) => res.sendFile(__dirname + '/public/index.html'));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`✅ Running on port ${PORT}`));
