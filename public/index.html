@@ -3,293 +3,161 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OptionsAI — Tradier Trading Bot</title>
+<title>OptionsAI — Scalping Bot</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'JetBrains Mono', 'Courier New', monospace;
-    background: #080c10;
-    color: #c8d8e8;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: #080c10; }
-  ::-webkit-scrollbar-thumb { background: #1a3a5c; border-radius: 2px; }
-  @keyframes pulse {
-    0%, 100% { opacity: .3; transform: scale(.8); }
-    50% { opacity: 1; transform: scale(1); }
-  }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: #00d4ff; display: inline-block; }
-  .dot:nth-child(1) { animation: pulse 1s 0s infinite; }
-  .dot:nth-child(2) { animation: pulse 1s 0.2s infinite; }
-  .dot:nth-child(3) { animation: pulse 1s 0.4s infinite; }
-
-  /* SETUP SCREEN */
-  #setup-screen {
-    display: flex; align-items: center; justify-content: center;
-    flex: 1;
-  }
-  .setup-box {
-    width: 440px; background: #0d1a2a; border: 1px solid #1a3050;
-    border-radius: 12px; padding: 36px;
-  }
-  .setup-logo {
-    text-align: center; margin-bottom: 32px;
-  }
-  .setup-icon {
-    width: 48px; height: 48px; border-radius: 10px; margin: 0 auto 12px;
-    background: linear-gradient(135deg, #00d4ff, #0066ff);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px;
-  }
-  .setup-title { font-size: 20px; font-weight: 700; color: #e0f0ff; letter-spacing: 2px; }
-  .setup-title span { color: #00d4ff; }
-  .setup-subtitle { font-size: 11px; color: #3a6a9c; margin-top: 4px; }
-  .label { font-size: 10px; color: #3a6a9c; margin-bottom: 8px; letter-spacing: 1.5px; text-transform: uppercase; }
-  .mode-btns { display: flex; gap: 8px; margin-bottom: 8px; }
-  .mode-btn {
-    flex: 1; padding: 10px 0; border-radius: 6px; font-family: inherit;
-    font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 1px;
-    border: 1px solid #1a3050; background: transparent; color: #3a6a9c;
-    transition: all 0.2s;
-  }
-  .mode-btn.active-paper { background: #003366; border-color: #00d4ff; color: #fff; }
-  .mode-btn.active-live { background: #aa0000; border-color: #ff4444; color: #fff; }
-  .mode-info {
-    padding: 8px 12px; border-radius: 6px; font-size: 11px; margin-bottom: 16px;
-  }
-  .mode-info.paper { background: #001a33; border: 1px solid #00d4ff22; color: #8aaccc; }
-  .mode-info.live { background: #1a0000; border: 1px solid #ff444433; color: #ff8888; }
-  .token-input {
-    width: 100%; background: #080c10; border: 1px solid #1a3050;
-    border-radius: 6px; color: #c8d8e8; font-family: inherit;
-    font-size: 13px; padding: 10px 14px; outline: none; margin-bottom: 6px;
-  }
-  .token-input:focus { border-color: #00d4ff; }
-  .token-hint { font-size: 10px; color: #3a6a9c; margin-bottom: 20px; }
-  .token-hint a { color: #00d4ff; text-decoration: none; }
-  .connect-btn {
-    width: 100%; padding: 12px 0; border-radius: 6px;
-    background: linear-gradient(135deg, #0055cc, #00aaff);
-    border: none; color: #fff; font-size: 13px; font-family: inherit;
-    font-weight: 700; cursor: pointer; letter-spacing: 1px;
-  }
-  .connect-btn:disabled { background: #0d2040; cursor: default; }
-  .error-box {
-    padding: 8px 12px; background: #1a0000; border: 1px solid #ff444444;
-    border-radius: 6px; font-size: 12px; color: #ff8888; margin-bottom: 16px;
-  }
-
-  /* MAIN APP */
-  #main-app { display: none; flex-direction: column; height: 100vh; }
-  .topbar {
-    background: linear-gradient(90deg, #0a1628, #0d1f3c);
-    border-bottom: 1px solid #1a3a5c; padding: 0 20px;
-    display: flex; align-items: center; justify-content: space-between;
-    height: 52px; flex-shrink: 0;
-  }
-  .topbar-left { display: flex; align-items: center; gap: 12px; }
-  .topbar-icon {
-    width: 28px; height: 28px; border-radius: 6px;
-    background: linear-gradient(135deg, #00d4ff, #0066ff);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px; font-weight: bold; color: #fff;
-  }
-  .topbar-title { font-size: 15px; font-weight: 700; color: #e0f0ff; letter-spacing: 1px; }
-  .topbar-title span { color: #00d4ff; }
-  .mode-badge {
-    font-size: 10px; padding: 2px 8px; border-radius: 3px;
-  }
-  .mode-badge.paper { background: #001a10; border: 1px solid #00aa5544; color: #00cc66; }
-  .mode-badge.live { background: #1a0000; border: 1px solid #ff444444; color: #ff6666; }
-  .topbar-right { display: flex; align-items: center; gap: 16px; }
-  .stat-label { font-size: 11px; color: #8aaccc; }
-  .stat-label strong { color: #e0f0ff; }
-  .topbar-btn {
-    background: transparent; border: 1px solid #1a3050; color: #3a6a9c;
-    padding: 4px 10px; border-radius: 4px; font-size: 10px; font-family: inherit; cursor: pointer;
-  }
-  .auto-toggle { display: flex; align-items: center; gap: 8px; }
-  .auto-label { font-size: 10px; color: #3a6a9c; }
-  .toggle-track {
-    width: 36px; height: 18px; border-radius: 9px; background: #1a3a5c;
-    cursor: pointer; position: relative; transition: background 0.2s;
-  }
-  .toggle-track.on { background: #aa0000; }
-  .toggle-thumb {
-    position: absolute; top: 2px; left: 2px;
-    width: 14px; height: 14px; border-radius: 50%; background: #fff;
-    transition: left 0.2s;
-  }
-  .toggle-track.on .toggle-thumb { left: 18px; }
-
-  /* TABS */
-  .tabs {
-    display: flex; border-bottom: 1px solid #1a3a5c;
-    background: #080c10; flex-shrink: 0;
-  }
-  .tab-btn {
-    background: none; border: none; color: #3a6a9c;
-    padding: 10px 20px; font-size: 11px; font-family: inherit; cursor: pointer;
-    border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 1.5px;
-    transition: color 0.15s;
-  }
-  .tab-btn.active { color: #00d4ff; border-bottom-color: #00d4ff; }
-
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'JetBrains Mono','Courier New',monospace;background:#080c10;color:#c8d8e8;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#080c10}::-webkit-scrollbar-thumb{background:#1a3a5c;border-radius:2px}
+  @keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+  .dot{width:6px;height:6px;border-radius:50%;background:#00d4ff;display:inline-block}
+  .dot:nth-child(1){animation:pulse 1s 0s infinite}.dot:nth-child(2){animation:pulse 1s .2s infinite}.dot:nth-child(3){animation:pulse 1s .4s infinite}
+  /* SETUP */
+  #setup-screen{display:flex;align-items:center;justify-content:center;flex:1}
+  .setup-box{width:440px;background:#0d1a2a;border:1px solid #1a3050;border-radius:12px;padding:36px}
+  .setup-icon{width:48px;height:48px;border-radius:10px;margin:0 auto 12px;background:linear-gradient(135deg,#00d4ff,#0066ff);display:flex;align-items:center;justify-content:center;font-size:22px}
+  .setup-title{font-size:20px;font-weight:700;color:#e0f0ff;letter-spacing:2px;text-align:center}
+  .setup-title span{color:#00d4ff}
+  .setup-subtitle{font-size:11px;color:#3a6a9c;margin-top:4px;text-align:center;margin-bottom:28px}
+  .label{font-size:10px;color:#3a6a9c;margin-bottom:8px;letter-spacing:1.5px;text-transform:uppercase}
+  .mode-btns{display:flex;gap:8px;margin-bottom:8px}
+  .mode-btn{flex:1;padding:10px 0;border-radius:6px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:1px;border:1px solid #1a3050;background:transparent;color:#3a6a9c;transition:all .2s}
+  .mode-btn.active-paper{background:#003366;border-color:#00d4ff;color:#fff}
+  .mode-btn.active-live{background:#aa0000;border-color:#ff4444;color:#fff}
+  .mode-info{padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:16px}
+  .mode-info.paper{background:#001a33;border:1px solid #00d4ff22;color:#8aaccc}
+  .mode-info.live{background:#1a0000;border:1px solid #ff444433;color:#ff8888}
+  .field-input{width:100%;background:#080c10;border:1px solid #1a3050;border-radius:6px;color:#c8d8e8;font-family:inherit;font-size:13px;padding:10px 14px;outline:none;margin-bottom:6px}
+  .field-input:focus{border-color:#00d4ff}
+  .field-hint{font-size:10px;color:#3a6a9c;margin-bottom:20px}
+  .field-hint a{color:#00d4ff;text-decoration:none}
+  .connect-btn{width:100%;padding:12px 0;border-radius:6px;background:linear-gradient(135deg,#0055cc,#00aaff);border:none;color:#fff;font-size:13px;font-family:inherit;font-weight:700;cursor:pointer;letter-spacing:1px}
+  .connect-btn:disabled{background:#0d2040;cursor:default}
+  .error-box{padding:8px 12px;background:#1a0000;border:1px solid #ff444444;border-radius:6px;font-size:12px;color:#ff8888;margin-bottom:16px}
+  /* MAIN */
+  #main-app{display:none;flex-direction:column;height:100vh}
+  .topbar{background:linear-gradient(90deg,#0a1628,#0d1f3c);border-bottom:1px solid #1a3a5c;padding:0 16px;display:flex;align-items:center;justify-content:space-between;height:52px;flex-shrink:0}
+  .topbar-left{display:flex;align-items:center;gap:10px}
+  .topbar-icon{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#00d4ff,#0066ff);display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff}
+  .topbar-title{font-size:15px;font-weight:700;color:#e0f0ff;letter-spacing:1px}
+  .topbar-title span{color:#00d4ff}
+  .mode-badge{font-size:10px;padding:2px 8px;border-radius:3px}
+  .mode-badge.paper{background:#001a10;border:1px solid #00aa5544;color:#00cc66}
+  .mode-badge.live{background:#1a0000;border:1px solid #ff444444;color:#ff6666}
+  .topbar-right{display:flex;align-items:center;gap:10px}
+  .stat-label{font-size:11px;color:#8aaccc}
+  .stat-label strong{color:#e0f0ff}
+  .topbar-btn{background:transparent;border:1px solid #1a3050;color:#3a6a9c;padding:4px 10px;border-radius:4px;font-size:10px;font-family:inherit;cursor:pointer}
+  .kill-btn{background:#1a0000;border:1px solid #ff444444;color:#ff6666;padding:4px 12px;border-radius:4px;font-size:10px;font-family:inherit;cursor:pointer;font-weight:700}
+  .kill-btn.active{background:#ff0000;border-color:#ff0000;color:#fff;animation:blink 1s infinite}
+  .tabs{display:flex;border-bottom:1px solid #1a3a5c;background:#080c10;flex-shrink:0}
+  .tab-btn{background:none;border:none;color:#3a6a9c;padding:10px 18px;font-size:11px;font-family:inherit;cursor:pointer;border-bottom:2px solid transparent;text-transform:uppercase;letter-spacing:1.5px;transition:color .15s}
+  .tab-btn.active{color:#00d4ff;border-bottom-color:#00d4ff}
   /* CHAT */
-  #chat-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; }
-  .message { margin-bottom: 16px; display: flex; flex-direction: column; }
-  .message.user { align-items: flex-end; }
-  .message.assistant { align-items: flex-start; }
-  .msg-label { font-size: 10px; color: #3a6a9c; margin-bottom: 4px; letter-spacing: 1px; }
-  .msg-bubble {
-    max-width: 78%; padding: 10px 14px; font-size: 13px; line-height: 1.6;
-    color: #c8d8e8; white-space: pre-wrap;
-  }
-  .message.user .msg-bubble {
-    background: linear-gradient(135deg, #0d2a4c, #0a1f3a);
-    border: 1px solid #1a4a7c; border-radius: 12px 12px 2px 12px;
-  }
-  .message.assistant .msg-bubble {
-    background: #0d1a2a; border: 1px solid #1a3050;
-    border-radius: 12px 12px 12px 2px;
-  }
-  .trade-signal {
-    margin-top: 10px; padding: 8px 12px; background: #051020;
-    border: 1px solid #00d4ff33; border-radius: 6px; font-size: 11px;
-  }
-  .trade-signal-title { color: #00d4ff; margin-bottom: 4px; font-weight: 700; }
-  .trade-signal-detail { color: #8aaccc; }
-  .trade-signal-exp { color: #3a6a9c; font-size: 10px; margin-top: 2px; }
-  .loading-dots { display: flex; align-items: center; gap: 8px; color: #3a6a9c; font-size: 12px; padding: 8px 0; }
-  .dots-wrap { display: flex; gap: 4px; }
-
-  /* PENDING TRADE */
-  .pending-trade {
-    margin: 0 20px 12px; background: #051520;
-    border-radius: 8px; padding: 12px 16px;
-  }
-  .pending-trade.paper { border: 1px solid #00ff8844; }
-  .pending-trade.live { border: 1px solid #ff444444; }
-  .pending-title { font-size: 11px; font-weight: 700; margin-bottom: 6px; }
-  .pending-title.paper { color: #00ff88; }
-  .pending-title.live { color: #ff6666; }
-  .pending-detail { font-size: 12px; color: #c8d8e8; margin-bottom: 6px; }
-  .pending-reason { font-size: 11px; color: #3a6a9c; margin-bottom: 10px; }
-  .pending-btns { display: flex; gap: 8px; }
-  .confirm-btn {
-    border: none; color: #fff; padding: 6px 16px; border-radius: 4px;
-    font-size: 11px; font-family: inherit; cursor: pointer; font-weight: 700;
-  }
-  .confirm-btn.paper { background: #005522; }
-  .confirm-btn.live { background: #880000; }
-  .cancel-btn {
-    background: transparent; border: 1px solid #3a6a9c; color: #3a6a9c;
-    padding: 6px 16px; border-radius: 4px; font-size: 11px; font-family: inherit; cursor: pointer;
-  }
-
-  /* QUICK ACTIONS */
-  .quick-actions { padding: 0 20px 12px; display: flex; flex-wrap: wrap; gap: 8px; }
-  .quick-btn {
-    background: #0d1a2a; border: 1px solid #1a3050; color: #8aaccc;
-    padding: 6px 12px; border-radius: 4px; font-size: 11px; font-family: inherit; cursor: pointer;
-    transition: all 0.15s;
-  }
-  .quick-btn:hover { border-color: #00d4ff; color: #00d4ff; }
-
-  /* INPUT */
-  .input-area {
-    border-top: 1px solid #1a3a5c; padding: 12px 20px;
-    background: #080c10; display: flex; gap: 10px; align-items: flex-end;
-  }
-  .chat-input {
-    flex: 1; background: #0d1a2a; border: 1px solid #1a3050;
-    border-radius: 6px; color: #c8d8e8; font-family: inherit;
-    font-size: 13px; padding: 10px 14px; resize: none; outline: none;
-    min-height: 44px; max-height: 120px;
-  }
-  .chat-input:focus { border-color: #00d4ff; }
-  .chat-input::placeholder { color: #3a6a9c; }
-  .send-btn {
-    background: #0d1a2a; border: none; border-radius: 6px; padding: 10px 16px;
-    color: #3a6a9c; font-size: 13px; font-family: inherit; cursor: default;
-    transition: all 0.2s;
-  }
-  .send-btn.active {
-    background: linear-gradient(135deg, #0066ff, #00d4ff);
-    color: #fff; cursor: pointer;
-  }
-
-  /* POSITIONS */
-  #positions-panel { display: none; padding: 20px; overflow-y: auto; flex: 1; }
-  .panel-title { font-size: 11px; color: #3a6a9c; margin-bottom: 16px; letter-spacing: 1.5px; }
-  .position-card {
-    background: #0d1a2a; border: 1px solid #1a3050; border-radius: 8px;
-    padding: 14px 16px; margin-bottom: 10px; display: flex; justify-content: space-between;
-  }
-  .pos-symbol { font-size: 13px; font-weight: 700; color: #e0f0ff; margin-bottom: 4px; }
-  .pos-detail { font-size: 11px; color: #8aaccc; }
-  .pos-mkt { font-size: 11px; color: #3a6a9c; margin-top: 2px; }
-  .pos-pnl { font-size: 16px; font-weight: 700; }
-  .pos-pnl-pct { font-size: 10px; }
-  .green { color: #00ff88; }
-  .red { color: #ff4466; }
-  .summary-card {
-    margin-top: 10px; background: #0d1a2a; border: 1px solid #1a3050;
-    border-radius: 8px; padding: 14px 16px;
-  }
-  .summary-grid { display: flex; gap: 24px; flex-wrap: wrap; }
-  .summary-item .s-label { font-size: 10px; color: #3a6a9c; }
-  .summary-item .s-val { font-size: 16px; color: #e0f0ff; font-weight: 700; }
-
-  /* ORDERS */
-  #orders-panel { display: none; padding: 20px; overflow-y: auto; flex: 1; }
-  .order-step {
-    background: #0d1a2a; border: 1px solid #1a3050; border-radius: 8px;
-    padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 16px;
-  }
-  .step-num { font-size: 20px; color: #00d4ff22; font-weight: 700; flex-shrink: 0; }
-  .step-title { font-size: 13px; color: #e0f0ff; font-weight: 700; margin-bottom: 4px; }
-  .step-desc { font-size: 12px; color: #8aaccc; }
-  .mode-notice {
-    margin-top: 20px; padding: 14px 16px; border-radius: 8px; font-size: 12px;
-  }
-  .mode-notice.paper { background: #001a10; border: 1px solid #00aa5533; color: #88cc88; }
-  .mode-notice.live { background: #1a0000; border: 1px solid #ff444433; color: #ff8888; }
+  #chat-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .messages{flex:1;overflow-y:auto;padding:16px 20px}
+  .message{margin-bottom:16px;display:flex;flex-direction:column}
+  .message.user{align-items:flex-end}.message.assistant,.message.system{align-items:flex-start}
+  .msg-label{font-size:10px;color:#3a6a9c;margin-bottom:4px;letter-spacing:1px}
+  .msg-bubble{max-width:78%;padding:10px 14px;font-size:13px;line-height:1.6;color:#c8d8e8;white-space:pre-wrap}
+  .message.user .msg-bubble{background:linear-gradient(135deg,#0d2a4c,#0a1f3a);border:1px solid #1a4a7c;border-radius:12px 12px 2px 12px}
+  .message.assistant .msg-bubble{background:#0d1a2a;border:1px solid #1a3050;border-radius:12px 12px 12px 2px}
+  .message.system .msg-bubble{background:#051520;border:1px solid #00d4ff22;border-radius:8px;font-size:11px;color:#5a8aac;max-width:100%}
+  .trade-signal{margin-top:10px;padding:8px 12px;background:#051020;border:1px solid #00d4ff33;border-radius:6px;font-size:11px}
+  .trade-signal-title{color:#00d4ff;margin-bottom:4px;font-weight:700}
+  .trade-signal-detail{color:#8aaccc}
+  .trade-signal-exp{color:#3a6a9c;font-size:10px;margin-top:2px}
+  .loading-dots{display:flex;align-items:center;gap:8px;color:#3a6a9c;font-size:12px;padding:8px 0}
+  .dots-wrap{display:flex;gap:4px}
+  .pending-trade{margin:0 20px 12px;background:#051520;border-radius:8px;padding:12px 16px}
+  .pending-trade.paper{border:1px solid #00ff8844}.pending-trade.live{border:1px solid #ff444444}
+  .pending-title{font-size:11px;font-weight:700;margin-bottom:6px}
+  .pending-title.paper{color:#00ff88}.pending-title.live{color:#ff6666}
+  .pending-detail{font-size:12px;color:#c8d8e8;margin-bottom:6px}
+  .pending-reason{font-size:11px;color:#3a6a9c;margin-bottom:10px}
+  .pending-btns{display:flex;gap:8px}
+  .confirm-btn{border:none;color:#fff;padding:6px 16px;border-radius:4px;font-size:11px;font-family:inherit;cursor:pointer;font-weight:700}
+  .confirm-btn.paper{background:#005522}.confirm-btn.live{background:#880000}
+  .cancel-btn{background:transparent;border:1px solid #3a6a9c;color:#3a6a9c;padding:6px 16px;border-radius:4px;font-size:11px;font-family:inherit;cursor:pointer}
+  .quick-actions{padding:0 20px 12px;display:flex;flex-wrap:wrap;gap:8px}
+  .quick-btn{background:#0d1a2a;border:1px solid #1a3050;color:#8aaccc;padding:6px 12px;border-radius:4px;font-size:11px;font-family:inherit;cursor:pointer;transition:all .15s}
+  .quick-btn:hover{border-color:#00d4ff;color:#00d4ff}
+  .input-area{border-top:1px solid #1a3a5c;padding:12px 20px;background:#080c10;display:flex;gap:10px;align-items:flex-end}
+  .chat-input{flex:1;background:#0d1a2a;border:1px solid #1a3050;border-radius:6px;color:#c8d8e8;font-family:inherit;font-size:13px;padding:10px 14px;resize:none;outline:none;min-height:44px;max-height:120px}
+  .chat-input:focus{border-color:#00d4ff}
+  .chat-input::placeholder{color:#3a6a9c}
+  .send-btn{background:#0d1a2a;border:none;border-radius:6px;padding:10px 16px;color:#3a6a9c;font-size:13px;font-family:inherit;cursor:default;transition:all .2s}
+  .send-btn.active{background:linear-gradient(135deg,#0066ff,#00d4ff);color:#fff;cursor:pointer}
+  /* PANELS */
+  #positions-panel,#orders-panel,#autoinvest-panel{display:none;padding:20px;overflow-y:auto;flex:1}
+  .panel-title{font-size:11px;color:#3a6a9c;margin-bottom:16px;letter-spacing:1.5px}
+  .position-card{background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;margin-bottom:10px}
+  .pos-symbol{font-size:13px;font-weight:700;color:#e0f0ff;margin-bottom:4px}
+  .pos-detail{font-size:11px;color:#8aaccc}.pos-mkt{font-size:11px;color:#3a6a9c;margin-top:2px}
+  .green{color:#00ff88}.red{color:#ff4466}.orange{color:#ffaa00}
+  .progress-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .progress-bar{flex:1;height:4px;border-radius:2px;background:#1a3050;overflow:hidden}
+  .progress-fill{height:100%;border-radius:2px;transition:width .5s}
+  .progress-labels{display:flex;justify-content:space-between;font-size:10px;color:#3a6a9c;margin-top:3px}
+  .summary-card{margin-top:10px;background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px}
+  .summary-grid{display:flex;gap:24px;flex-wrap:wrap}
+  .s-label{font-size:10px;color:#3a6a9c}.s-val{font-size:16px;color:#e0f0ff;font-weight:700}
+  /* AUTO-INVEST */
+  .ai-card{background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:16px;margin-bottom:14px}
+  .ai-card-title{font-size:11px;color:#00d4ff;letter-spacing:1.5px;margin-bottom:12px;font-weight:700}
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .toggle-track{width:36px;height:18px;border-radius:9px;background:#1a3a5c;cursor:pointer;position:relative;transition:background .2s}
+  .toggle-track.on{background:#00aa55}
+  .toggle-thumb{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .2s}
+  .toggle-track.on .toggle-thumb{left:18px}
+  .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+  .status-dot.on{background:#00ff88;animation:pulse 1.5s infinite}
+  .status-dot.off{background:#3a6a9c}
+  .status-dot.scanning{background:#ffaa00;animation:pulse .8s infinite}
+  .setting-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:12px;color:#8aaccc}
+  .setting-input{background:#080c10;border:1px solid #1a3050;border-radius:4px;color:#c8d8e8;font-family:inherit;font-size:12px;padding:4px 8px;width:90px;outline:none;text-align:right}
+  .setting-input:focus{border-color:#00d4ff}
+  .watchlist-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .watchlist-tag{background:#0a1628;border:1px solid #1a3050;border-radius:4px;padding:4px 10px;font-size:11px;color:#8aaccc;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .watchlist-tag.active{border-color:#00d4ff44;color:#00d4ff;background:#001a33}
+  .add-ticker{display:flex;gap:6px;margin-top:8px}
+  .add-ticker input{flex:1;background:#080c10;border:1px solid #1a3050;border-radius:4px;color:#c8d8e8;font-family:inherit;font-size:12px;padding:6px 10px;outline:none}
+  .add-ticker input:focus{border-color:#00d4ff}
+  .add-ticker button{background:#003366;border:1px solid #00d4ff44;color:#00d4ff;padding:6px 12px;border-radius:4px;font-size:11px;font-family:inherit;cursor:pointer}
+  .scan-log{background:#051020;border:1px solid #1a3050;border-radius:6px;padding:10px;max-height:160px;overflow-y:auto;font-size:11px;line-height:1.8}
+  .log-entry{color:#5a8aac}.log-trade{color:#00ff88!important}.log-stop{color:#ff6644!important}.log-skip{color:#3a6a9c!important}
+  .next-scan{font-size:11px;color:#3a6a9c;margin-top:6px;text-align:center}
+  .stats-row{display:flex;gap:16px;flex-wrap:wrap}
+  .stat-box{background:#080c10;border:1px solid #1a3050;border-radius:6px;padding:10px 14px;flex:1;min-width:80px}
+  .stat-box-label{font-size:10px;color:#3a6a9c;margin-bottom:4px}
+  .stat-box-val{font-size:16px;font-weight:700}
+  .daily-bar{height:6px;border-radius:3px;background:linear-gradient(90deg,#00ff88 0%,#ffaa00 60%,#ff4466 100%);margin:8px 0;position:relative}
+  .daily-marker{position:absolute;top:-3px;width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #0d1a2a;transform:translateX(-50%);transition:left .5s}
 </style>
 </head>
 <body>
 
-<!-- SETUP SCREEN -->
+<!-- SETUP -->
 <div id="setup-screen">
   <div class="setup-box">
-    <div class="setup-logo">
-      <div class="setup-icon">⚡</div>
-      <div class="setup-title">OPTIONS<span>AI</span></div>
-      <div class="setup-subtitle">Tradier Brokerage Integration</div>
-    </div>
+    <div class="setup-icon" style="text-align:center;margin-bottom:12px">⚡</div>
+    <div class="setup-title">OPTIONS<span>AI</span></div>
+    <div class="setup-subtitle">Scalping Bot · Tradier Integration</div>
     <div style="margin-bottom:20px">
       <div class="label">Trading Mode</div>
       <div class="mode-btns">
         <button class="mode-btn active-paper" id="btn-paper" onclick="setMode('paper')">📄 PAPER</button>
         <button class="mode-btn" id="btn-live" onclick="setMode('live')">⚡ LIVE</button>
       </div>
-      <div class="mode-info paper" id="mode-info">📄 Paper mode uses Tradier's sandbox — no real money.</div>
+      <div class="mode-info paper" id="mode-info">📄 Paper mode — Tradier sandbox, no real money.</div>
     </div>
     <div style="margin-bottom:20px">
       <div class="label" id="token-label">Tradier Paper API Token</div>
-      <input type="password" class="token-input" id="token-input" placeholder="Paste your Tradier API token..." />
-      <div class="token-hint">Get your token at <a href="https://developer.tradier.com" target="_blank">developer.tradier.com</a> → Applications → your app → Access Token</div>
+      <input type="password" class="field-input" id="token-input" placeholder="Paste your Tradier API token..." onkeydown="if(event.key==='Enter')handleConnect()"/>
+      <div class="field-hint">Get token at <a href="https://developer.tradier.com" target="_blank">developer.tradier.com</a> → Applications → Access Token</div>
     </div>
     <div class="error-box" id="error-box" style="display:none"></div>
     <button class="connect-btn" id="connect-btn" onclick="handleConnect()">CONNECT TO TRADIER PAPER</button>
-    <div style="margin-top:24px;font-size:10px;color:#1a3050;text-align:center;line-height:1.6">
-      Your token is never stored — it lives only in this session's memory.
-    </div>
   </div>
 </div>
 
@@ -304,21 +172,16 @@
     <div class="topbar-right">
       <div class="stat-label" id="cash-stat" style="display:none"></div>
       <div class="stat-label" id="equity-stat" style="display:none"></div>
-      <button class="topbar-btn" onclick="loadAccountData()">↻ REFRESH</button>
-      <div class="auto-toggle">
-        <span class="auto-label">AUTO</span>
-        <div class="toggle-track" id="auto-toggle" onclick="toggleAuto()">
-          <div class="toggle-thumb"></div>
-        </div>
-      </div>
+      <button class="kill-btn" id="kill-btn" onclick="toggleKillSwitch()">🛑 KILL SWITCH</button>
+      <button class="topbar-btn" onclick="loadAccountData()">↻</button>
       <button class="topbar-btn" onclick="disconnect()">DISCONNECT</button>
     </div>
   </div>
-
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('chat')">Chat</button>
+    <button class="tab-btn" onclick="switchTab('autoinvest')">Auto-Invest</button>
     <button class="tab-btn" onclick="switchTab('positions')">Positions</button>
-    <button class="tab-btn" onclick="switchTab('orders')">Orders</button>
+    <button class="tab-btn" onclick="switchTab('orders')">How It Works</button>
   </div>
 
   <!-- CHAT PANEL -->
@@ -334,14 +197,94 @@
       </div>
     </div>
     <div class="quick-actions" id="quick-actions">
-      <button class="quick-btn" onclick="sendQuick('Analyze AAPL for a bullish call this week')">Analyze AAPL for a bullish call this week</button>
-      <button class="quick-btn" onclick="sendQuick('Find a cheap put hedge for market downturn')">Find a cheap put hedge for market downturn</button>
-      <button class="quick-btn" onclick="sendQuick('What is a safe covered call strategy?')">What is a safe covered call strategy?</button>
-      <button class="quick-btn" onclick="sendQuick('Review my current positions')">Review my current positions</button>
+      <button class="quick-btn" onclick="sendQuick('Analyze AAPL for a quick scalp trade')">Scalp AAPL</button>
+      <button class="quick-btn" onclick="sendQuick('Find a fast put trade for SPY')">SPY put trade</button>
+      <button class="quick-btn" onclick="sendQuick('What is the best options scalp right now?')">Best scalp now</button>
+      <button class="quick-btn" onclick="sendQuick('Review my positions and check profit targets')">Check positions</button>
     </div>
     <div class="input-area">
-      <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask for analysis, say 'buy 1 AAPL call at $200 expiring Friday'..." onkeydown="handleKey(event)" oninput="updateSendBtn()"></textarea>
+      <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask for analysis or say 'buy 1 AAPL call at $200 expiring Friday'..." onkeydown="handleKey(event)" oninput="updateSendBtn()"></textarea>
       <button class="send-btn" id="send-btn" onclick="sendMessage()">▶</button>
+    </div>
+  </div>
+
+  <!-- AUTO-INVEST PANEL -->
+  <div id="autoinvest-panel">
+    <div class="panel-title">AUTO-INVEST · SCALPING MODE</div>
+
+    <!-- Stats row -->
+    <div class="stats-row" style="margin-bottom:14px">
+      <div class="stat-box"><div class="stat-box-label">TODAY'S PROFIT</div><div class="stat-box-val green" id="daily-profit-display">$0.00</div></div>
+      <div class="stat-box"><div class="stat-box-label">TODAY'S LOSS</div><div class="stat-box-val red" id="daily-loss-display">$0.00</div></div>
+      <div class="stat-box"><div class="stat-box-label">TRADES TODAY</div><div class="stat-box-val" id="trades-today-display" style="color:#e0f0ff">0</div></div>
+      <div class="stat-box"><div class="stat-box-label">WIN RATE</div><div class="stat-box-val green" id="win-rate-display">—</div></div>
+    </div>
+
+    <!-- Engine toggle -->
+    <div class="ai-card">
+      <div class="ai-card-title">⚡ SCALP ENGINE</div>
+      <div class="toggle-row">
+        <div style="font-size:13px;color:#e0f0ff"><span class="status-dot off" id="engine-dot"></span><span id="engine-status">Inactive</span></div>
+        <div class="toggle-track" id="engine-toggle" onclick="toggleEngine()"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="next-scan" id="next-scan-label">Enable to start scanning</div>
+    </div>
+
+    <!-- Profit / Stop settings -->
+    <div class="ai-card">
+      <div class="ai-card-title">🎯 PROFIT TARGET &amp; STOP-LOSS</div>
+      <div class="setting-row">
+        <span>Profit target per trade</span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="profit-target" value="1.00" min="0.10" step="0.10" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
+        <span>Stop-loss per trade</span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="stop-loss-dollar" value="0.10" min="0.01" step="0.01" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
+        <span>Daily max loss</span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-max" value="500" min="10" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
+        <span>Contracts per trade</span>
+        <input type="number" class="setting-input" id="contracts-per-trade" value="1" min="1" max="10" onchange="updateSettings()">
+      </div>
+      <div class="setting-row">
+        <span>Max open positions</span>
+        <input type="number" class="setting-input" id="max-positions" value="3" min="1" max="10" onchange="updateSettings()">
+      </div>
+      <div class="setting-row" style="margin-bottom:0">
+        <span>Scan interval</span>
+        <select class="setting-input" id="scan-schedule" onchange="updateSettings()" style="width:110px">
+          <option value="1min">Every 1 min</option>
+          <option value="5min" selected>Every 5 min</option>
+          <option value="15min">Every 15 min</option>
+          <option value="30min">Every 30 min</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Watchlist -->
+    <div class="ai-card">
+      <div class="ai-card-title">👁 WATCHLIST</div>
+      <div class="watchlist-grid" id="watchlist-grid"></div>
+      <div class="add-ticker">
+        <input type="text" id="add-ticker-input" placeholder="Add ticker (e.g. TSLA)" maxlength="6" onkeydown="if(event.key==='Enter')addTicker()" style="text-transform:uppercase"/>
+        <button onclick="addTicker()">+ ADD</button>
+      </div>
+    </div>
+
+    <!-- Daily loss bar -->
+    <div class="ai-card">
+      <div class="ai-card-title">🛡️ DAILY LOSS GUARD</div>
+      <div class="daily-bar"><div class="daily-marker" id="daily-marker" style="left:0%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#3a6a9c"><span>$0</span><span id="daily-max-label">$500 limit</span></div>
+    </div>
+
+    <!-- Scan log -->
+    <div class="ai-card">
+      <div class="ai-card-title">📋 ACTIVITY LOG</div>
+      <div class="scan-log" id="scan-log"><div class="log-entry">No activity yet. Enable the engine to start.</div></div>
     </div>
   </div>
 
@@ -355,325 +298,434 @@
     </div>
   </div>
 
-  <!-- ORDERS PANEL -->
+  <!-- HOW IT WORKS -->
   <div id="orders-panel">
-    <div class="panel-title">HOW TO PLACE ORDERS</div>
-    <div class="order-step"><div class="step-num">01</div><div><div class="step-title">Natural language</div><div class="step-desc">Type in chat: "Buy 2 TSLA calls at $250 strike expiring next Friday"</div></div></div>
-    <div class="order-step"><div class="step-num">02</div><div><div class="step-title">AI analyzes</div><div class="step-desc">Claude identifies the best option contract, checks your buying power, and builds the order</div></div></div>
-    <div class="order-step"><div class="step-num">03</div><div><div class="step-title">Review & confirm</div><div class="step-desc">You see the exact order details before anything is submitted</div></div></div>
-    <div class="order-step"><div class="step-num">04</div><div><div class="step-title">Submitted to Tradier</div><div class="step-desc">Order goes directly to Tradier's API — same as placing it in their platform</div></div></div>
-    <div class="mode-notice paper" id="orders-notice">📄 You are in PAPER mode. Orders are simulated in Tradier's sandbox — no real money.</div>
+    <div class="panel-title">HOW THE SCALPING BOT WORKS</div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;display:flex;gap:16px"><div style="font-size:18px;color:#00d4ff22;font-weight:700;flex-shrink:0;width:28px">01</div><div><div style="font-size:13px;color:#e0f0ff;font-weight:700;margin-bottom:4px">Continuous scanning</div><div style="font-size:12px;color:#8aaccc">Scans your watchlist on your chosen interval (every 1–30 min). Immediately rescans after each completed trade.</div></div></div>
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;display:flex;gap:16px"><div style="font-size:18px;color:#00d4ff22;font-weight:700;flex-shrink:0;width:28px">02</div><div><div style="font-size:13px;color:#e0f0ff;font-weight:700;margin-bottom:4px">AI signal confirmation</div><div style="font-size:12px;color:#8aaccc">Claude analyzes each ticker for a high-confidence call or put setup. Skips anything that isn't clear.</div></div></div>
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;display:flex;gap:16px"><div style="font-size:18px;color:#00ff88;font-weight:700;flex-shrink:0;width:28px">$1</div><div><div style="font-size:13px;color:#e0f0ff;font-weight:700;margin-bottom:4px">$1.00 profit target</div><div style="font-size:12px;color:#8aaccc">Each position is monitored every 60 seconds. As soon as premium gains $1.00 per contract, the position is closed and profit is locked in.</div></div></div>
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;display:flex;gap:16px"><div style="font-size:18px;color:#ff4466;font-weight:700;flex-shrink:0;width:28px">$.10</div><div><div style="font-size:13px;color:#e0f0ff;font-weight:700;margin-bottom:4px">$0.10 stop-loss</div><div style="font-size:12px;color:#8aaccc">If the position drops $0.10 per contract from entry, it closes immediately to protect capital.</div></div></div>
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:14px 16px;display:flex;gap:16px"><div style="font-size:18px;color:#ffaa00;font-weight:700;flex-shrink:0;width:28px">↺</div><div><div style="font-size:13px;color:#e0f0ff;font-weight:700;margin-bottom:4px">Continuous loop</div><div style="font-size:12px;color:#8aaccc">After each trade closes (win or loss), the engine immediately scans for the next opportunity and repeats.</div></div></div>
+    </div>
+    <div style="margin-top:16px;padding:12px 16px;background:#1a0a00;border:1px solid #ff440022;border-radius:8px;font-size:11px;color:#aa6644;line-height:1.6">
+      ⚠️ Options scalping is high risk. $0.10 stops are very tight and may trigger frequently on normal bid/ask spread movement. Test thoroughly in paper mode before going live.
+    </div>
   </div>
 </div>
 
 <script>
 const PROXY_URL    = 'https://optionsai-proxy-production.up.railway.app/tradier';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-const SYSTEM_PROMPT = `You are OptionsAI, an expert options trading assistant connected to a real brokerage (Tradier). You help users analyze and execute real options trades.
-You have access to live account data, real positions, and can place real orders.
-When a user confirms they want to place a trade, respond with a structured trade block:
-<TRADE>{"action":"BUY" or "SELL","type":"CALL" or "PUT","ticker":"SYMBOL","strike":000,"expiry":"YYYY-MM-DD","contracts":1,"orderType":"market" or "limit","limitPrice":0.00,"reason":"brief reason"}</TRADE>
-Always explain Greeks, IV, risk/reward. Be direct. Remind users that real money is at risk.
-Keep responses concise. Use proper options terminology.`;
+const SYSTEM_PROMPT = `You are OptionsAI, a scalping bot assistant for options trading on Tradier.
+When placing a trade respond ONLY with: <TRADE>{"action":"BUY" or "SELL","type":"CALL" or "PUT","ticker":"SYMBOL","strike":000,"expiry":"YYYY-MM-DD","contracts":1,"orderType":"limit","limitPrice":0.00,"reason":"brief"}</TRADE>
+For auto-scan respond ONLY with: <SCAN_RESULT>{"ticker":"SYMBOL","signal":"BUY_CALL" or "BUY_PUT" or "NONE","confidence":"HIGH" or "MEDIUM" or "LOW","strike":0,"expiry":"YYYY-MM-DD","premium":0.00,"reason":"brief"}</SCAN_RESULT>
+Focus on short-term momentum. Suggest limit orders near current ask. Be direct and concise.`;
 
-let session = null;
-let messages = [];
-let autoTrade = false;
-let pendingTrade = null;
-let balances = null;
-let positions = [];
-let currentMode = 'paper';
-let loading = false;
+// State
+let session=null,messages=[],pendingTrade=null,balances=null,positions=[],currentMode='paper',loading=false;
+let engineOn=false,killSwitchOn=false,scanTimer=null,profitMonitorTimer=null;
+let dailyLoss=0,dailyProfit=0,tradesToday=0,wins=0,losses=0;
+let settings={profitTarget:1.00,stopLoss:0.10,dailyMax:500,maxPositions:3,contracts:1,schedule:'5min'};
+let trackedPositions={}; // symbol -> {entryPrice, contracts}
+let watchlist=['AAPL','SPY','NVDA','TSLA','QQQ'];
+let scanLog=[];
 
-function setMode(mode) {
-  currentMode = mode;
-  document.getElementById('btn-paper').className = 'mode-btn' + (mode === 'paper' ? ' active-paper' : '');
-  document.getElementById('btn-live').className = 'mode-btn' + (mode === 'live' ? ' active-live' : '');
-  const info = document.getElementById('mode-info');
-  info.className = 'mode-info ' + mode;
-  info.textContent = mode === 'paper'
-    ? '📄 Paper mode uses Tradier\'s sandbox — no real money.'
-    : '⚠️ LIVE mode trades with real money. Losses are real.';
-  document.getElementById('token-label').textContent = `Tradier ${mode.toUpperCase()} API Token`;
-  document.getElementById('connect-btn').textContent = `CONNECT TO TRADIER ${mode.toUpperCase()}`;
+// ── SETUP ──────────────────────────────────────────────────────────────────────
+function setMode(m){
+  currentMode=m;
+  document.getElementById('btn-paper').className='mode-btn'+(m==='paper'?' active-paper':'');
+  document.getElementById('btn-live').className='mode-btn'+(m==='live'?' active-live':'');
+  const info=document.getElementById('mode-info');
+  info.className='mode-info '+m;
+  info.textContent=m==='paper'?"📄 Paper mode — Tradier sandbox, no real money.":"⚠️ LIVE mode — real money at risk!";
+  document.getElementById('token-label').textContent=`Tradier ${m.toUpperCase()} API Token`;
+  document.getElementById('connect-btn').textContent=`CONNECT TO TRADIER ${m.toUpperCase()}`;
 }
 
-async function handleConnect() {
-  const token = document.getElementById('token-input').value.trim();
-  if (!token) { showError('Please enter your Tradier API token.'); return; }
-  const btn = document.getElementById('connect-btn');
-  btn.disabled = true; btn.textContent = 'CONNECTING...';
-  hideError();
-  try {
-    const isLive = currentMode === 'live';
-    const res = await fetch(`${PROXY_URL}/user/profile`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json',
-        'x-tradier-live': isLive ? 'true' : 'false',
-      }
-    });
-    if (!res.ok) throw new Error('Invalid token or connection failed.');
-    const data = await res.json();
-    const accountId = data.profile?.account?.account_number
-      || data.profile?.accounts?.account?.[0]?.account_number;
-    session = { token, accountId, isLive, name: data.profile?.name || 'Trader' };
+async function handleConnect(){
+  const token=document.getElementById('token-input').value.trim();
+  if(!token){showError('Please enter your Tradier API token.');return;}
+  const btn=document.getElementById('connect-btn');
+  btn.disabled=true;btn.textContent='CONNECTING...';hideError();
+  try{
+    const isLive=currentMode==='live';
+    const res=await fetch(`${PROXY_URL}/user/profile`,{headers:{'Authorization':`Bearer ${token}`,'Accept':'application/json','x-tradier-live':isLive?'true':'false'}});
+    if(!res.ok)throw new Error('Invalid token or connection failed.');
+    const data=await res.json();
+    const accountId=data.profile?.account?.account_number||data.profile?.accounts?.account?.[0]?.account_number;
+    session={token,accountId,isLive,name:data.profile?.name||'Trader'};
     startApp();
-  } catch(e) {
-    showError(e.message);
-    btn.disabled = false;
-    btn.textContent = `CONNECT TO TRADIER ${currentMode.toUpperCase()}`;
+  }catch(e){
+    showError(e.message);btn.disabled=false;
+    btn.textContent=`CONNECT TO TRADIER ${currentMode.toUpperCase()}`;
   }
 }
+function showError(m){const e=document.getElementById('error-box');e.textContent=m;e.style.display='block';}
+function hideError(){document.getElementById('error-box').style.display='none';}
 
-function showError(msg) {
-  const el = document.getElementById('error-box');
-  el.textContent = msg; el.style.display = 'block';
-}
-function hideError() {
-  document.getElementById('error-box').style.display = 'none';
-}
-
-function startApp() {
-  document.getElementById('setup-screen').style.display = 'none';
-  const app = document.getElementById('main-app');
-  app.style.display = 'flex';
-  const badge = document.getElementById('mode-badge');
-  badge.textContent = session.isLive ? '🔴 LIVE · ' + session.accountId : '📄 PAPER · ' + session.accountId;
-  badge.className = 'mode-badge ' + (session.isLive ? 'live' : 'paper');
-  addMessage('assistant', `Connected to Tradier ${session.isLive ? 'LIVE' : 'paper'} account (${session.accountId}). Welcome, ${session.name}. I have access to your real positions and can place orders. What would you like to trade?`);
+function startApp(){
+  document.getElementById('setup-screen').style.display='none';
+  document.getElementById('main-app').style.display='flex';
+  const badge=document.getElementById('mode-badge');
+  badge.textContent=(session.isLive?'🔴 LIVE · ':'📄 PAPER · ')+session.accountId;
+  badge.className='mode-badge '+(session.isLive?'live':'paper');
+  addMessage('assistant',`Connected to Tradier ${session.isLive?'LIVE':'paper'} (${session.accountId}). Welcome, ${session.name}!\n\nScalping bot ready. Go to Auto-Invest tab to enable continuous trading with $1.00 profit targets and $0.10 stop-losses.`);
+  renderWatchlist();
   loadAccountData();
+  startProfitMonitor();
 }
 
-function disconnect() {
-  session = null; messages = []; balances = null; positions = [];
-  document.getElementById('setup-screen').style.display = 'flex';
-  document.getElementById('main-app').style.display = 'none';
-  document.getElementById('messages').innerHTML = '';
+function disconnect(){
+  stopEngine();clearInterval(profitMonitorTimer);
+  session=null;messages=[];balances=null;positions=[];trackedPositions={};
+  document.getElementById('setup-screen').style.display='flex';
+  document.getElementById('main-app').style.display='none';
+  document.getElementById('messages').innerHTML='';
 }
 
-async function loadAccountData() {
-  if (!session) return;
-  try {
-    const [balRes, posRes] = await Promise.all([
-      fetch(`${PROXY_URL}/accounts/${session.accountId}/balances`, {
-        headers: { 'Authorization': `Bearer ${session.token}`, 'x-tradier-live': session.isLive ? 'true' : 'false' }
-      }),
-      fetch(`${PROXY_URL}/accounts/${session.accountId}/positions`, {
-        headers: { 'Authorization': `Bearer ${session.token}`, 'x-tradier-live': session.isLive ? 'true' : 'false' }
-      })
+// ── ACCOUNT ────────────────────────────────────────────────────────────────────
+async function loadAccountData(){
+  if(!session)return;
+  try{
+    const[balRes,posRes]=await Promise.all([
+      fetch(`${PROXY_URL}/accounts/${session.accountId}/balances`,{headers:{'Authorization':`Bearer ${session.token}`,'x-tradier-live':session.isLive?'true':'false'}}),
+      fetch(`${PROXY_URL}/accounts/${session.accountId}/positions`,{headers:{'Authorization':`Bearer ${session.token}`,'x-tradier-live':session.isLive?'true':'false'}})
     ]);
-    const balData = await balRes.json();
-    const posData = await posRes.json();
-    balances = balData?.balances;
-    const rawPos = posData?.positions?.position;
-    positions = rawPos ? (Array.isArray(rawPos) ? rawPos : [rawPos]) : [];
-    updateStats();
-    renderPositions();
-  } catch(e) { console.error('Failed to load account data:', e); }
+    const bd=await balRes.json();const pd=await posRes.json();
+    balances=bd?.balances;
+    const rp=pd?.positions?.position;
+    positions=rp?(Array.isArray(rp)?rp:[rp]):[];
+    updateStats();renderPositions();
+  }catch(e){console.error(e);}
 }
 
-function updateStats() {
-  if (!balances) return;
-  const cash = balances?.cash?.cash_available;
-  const equity = balances?.total_equity;
-  const cashEl = document.getElementById('cash-stat');
-  const eqEl = document.getElementById('equity-stat');
-  if (cash !== undefined) { cashEl.innerHTML = `Cash: <strong>$${cash.toFixed(0)}</strong>`; cashEl.style.display = 'block'; }
-  if (equity !== undefined) { eqEl.innerHTML = `Equity: <strong>$${equity.toFixed(0)}</strong>`; eqEl.style.display = 'block'; }
+function updateStats(){
+  if(!balances)return;
+  const cash=balances?.cash?.cash_available,eq=balances?.total_equity;
+  const ce=document.getElementById('cash-stat'),ee=document.getElementById('equity-stat');
+  if(cash!==undefined){ce.innerHTML=`Cash: <strong>$${cash.toFixed(0)}</strong>`;ce.style.display='block';}
+  if(eq!==undefined){ee.innerHTML=`Equity: <strong>$${eq.toFixed(0)}</strong>`;ee.style.display='block';}
 }
 
-function renderPositions() {
-  const list = document.getElementById('positions-list');
-  document.getElementById('pos-title').textContent = `LIVE POSITIONS (${positions.length})`;
-  if (positions.length === 0) { list.innerHTML = '<div style="color:#3a6a9c;font-size:13px">No open positions found.</div>'; }
-  else {
-    list.innerHTML = positions.map(p => {
-      const isCall = p.symbol?.includes('C');
-      const pnl = (p.cost_basis && p.market_value) ? p.market_value - p.cost_basis : null;
-      const pnlPct = pnl !== null && p.cost_basis ? (pnl / p.cost_basis * 100).toFixed(1) : null;
-      return `<div class="position-card" style="border-left:3px solid ${isCall ? '#00d4ff' : '#ff6644'}">
+function renderPositions(){
+  const list=document.getElementById('positions-list');
+  document.getElementById('pos-title').textContent=`LIVE POSITIONS (${positions.length})`;
+  if(!positions.length){list.innerHTML='<div style="color:#3a6a9c;font-size:13px">No open positions.</div>';return;}
+  list.innerHTML=positions.map(p=>{
+    const isCall=p.symbol?.includes('C');
+    const pnl=(p.cost_basis&&p.market_value)?p.market_value-p.cost_basis:null;
+    const pnlPerContract=pnl!==null?(pnl/Math.abs(p.quantity||1)):null;
+    const toTarget=pnlPerContract!==null?settings.profitTarget-pnlPerContract:null;
+    const toStop=pnlPerContract!==null?pnlPerContract+settings.stopLoss:null;
+    const pct=pnlPerContract!==null?Math.max(0,Math.min(100,((pnlPerContract+settings.stopLoss)/(settings.profitTarget+settings.stopLoss))*100)):50;
+    const fillColor=pnlPerContract!==null&&pnlPerContract<=-settings.stopLoss?'#ff4466':pnlPerContract>=settings.profitTarget?'#00ff88':pnlPerContract>=0?'#00aaff':'#ffaa00';
+    return `<div class="position-card" style="border-left:3px solid ${isCall?'#00d4ff':'#ff6644'}">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <div>
           <div class="pos-symbol">${p.symbol}</div>
-          <div class="pos-detail">Qty: ${p.quantity} · Cost: $${p.cost_basis?.toFixed(2)}</div>
-          <div class="pos-mkt">Mkt Value: $${p.market_value?.toFixed(2)}</div>
+          <div class="pos-detail">Qty: ${p.quantity} · Entry: $${p.cost_basis?.toFixed(2)} · Now: $${p.market_value?.toFixed(2)}</div>
         </div>
-        ${pnl !== null ? `<div style="text-align:right">
-          <div class="pos-pnl ${pnl >= 0 ? 'green' : 'red'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</div>
-          <div class="pos-pnl-pct ${pnl >= 0 ? 'green' : 'red'}">${pnlPct}%</div>
-        </div>` : ''}
-      </div>`;
-    }).join('');
-  }
-  if (balances) {
-    const sg = document.getElementById('summary-grid');
-    sg.innerHTML = [
-      ['Total Equity', `$${balances.total_equity?.toFixed(2)}`],
-      ['Cash', `$${balances.cash?.cash_available?.toFixed(2)}`],
-      ['Open P&L', `$${balances.open_pl?.toFixed(2) || '0.00'}`],
-    ].map(([l, v]) => `<div class="summary-item"><div class="s-label">${l}</div><div class="s-val">${v}</div></div>`).join('');
-    document.getElementById('summary-card').style.display = 'block';
-  }
-}
-
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.className = 'tab-btn' + (['chat','positions','orders'][i] === tab ? ' active' : '');
-  });
-  document.getElementById('chat-panel').style.display = tab === 'chat' ? 'flex' : 'none';
-  document.getElementById('positions-panel').style.display = tab === 'positions' ? 'block' : 'none';
-  document.getElementById('orders-panel').style.display = tab === 'orders' ? 'block' : 'none';
-  if (tab !== 'chat') loadAccountData();
-}
-
-function toggleAuto() {
-  autoTrade = !autoTrade;
-  const t = document.getElementById('auto-toggle');
-  t.className = 'toggle-track' + (autoTrade ? ' on' : '');
-}
-
-function addMessage(role, content, trade = null) {
-  messages.push({ role, content });
-  const container = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = `message ${role}`;
-  let tradeHTML = '';
-  if (trade) {
-    tradeHTML = `<div class="trade-signal">
-      <div class="trade-signal-title">📋 TRADE SIGNAL</div>
-      <div class="trade-signal-detail">${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type}${trade.limitPrice ? ` @ $${trade.limitPrice} limit` : ' (market)'}</div>
-      <div class="trade-signal-exp">Expires: ${trade.expiry}</div>
+        ${pnl!==null?`<div style="text-align:right">
+          <div style="font-size:16px;font-weight:700;color:${pnl>=0?'#00ff88':'#ff4466'}">${pnl>=0?'+':''}$${pnl.toFixed(2)}</div>
+          <div style="font-size:10px;color:${pnlPerContract>=0?'#00ff88':'#ff4466'}">${pnlPerContract>=0?'+':''}$${pnlPerContract?.toFixed(2)}/contract</div>
+        </div>`:''}
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${fillColor}"></div></div>
+      <div class="progress-labels">
+        <span style="color:#ff4466">-$${settings.stopLoss.toFixed(2)} stop</span>
+        ${toTarget!==null?`<span style="color:#5a8aac">$${toTarget.toFixed(2)} to target</span>`:''}
+        <span style="color:#00ff88">+$${settings.profitTarget.toFixed(2)} target</span>
+      </div>
     </div>`;
+  }).join('');
+  if(balances){
+    const sg=document.getElementById('summary-grid');
+    sg.innerHTML=[['Equity',`$${balances.total_equity?.toFixed(2)}`],['Cash',`$${balances.cash?.cash_available?.toFixed(2)}`],['Open P&L',`$${balances.open_pl?.toFixed(2)||'0.00'}`]]
+      .map(([l,v])=>`<div class="summary-item"><div class="s-label">${l}</div><div class="s-val">${v}</div></div>`).join('');
+    document.getElementById('summary-card').style.display='block';
   }
-  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'YOU' : 'OPTIONSAI'}</div>
-    <div class="msg-bubble">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}${tradeHTML}</div>`;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
-  document.getElementById('quick-actions').style.display = messages.length > 2 ? 'none' : 'flex';
 }
 
-function parseTradeFromResponse(text) {
-  const match = text.match(/<TRADE>(.*?)<\/TRADE>/s);
-  if (match) { try { return JSON.parse(match[1]); } catch { return null; } }
-  return null;
-}
-function cleanResponse(text) {
-  return text.replace(/<TRADE>.*?<\/TRADE>/gs, '').trim();
-}
-function buildOptionSymbol(ticker, expiry, type, strike) {
-  const d = new Date(expiry);
-  const yy = String(d.getFullYear()).slice(2);
-  const mm = String(d.getMonth()+1).padStart(2,'0');
-  const dd = String(d.getDate()).padStart(2,'0');
-  const strikeStr = String(Math.round(strike*1000)).padStart(8,'0');
-  return `${ticker.padEnd(6)}${yy}${mm}${dd}${type[0]}${strikeStr}`;
-}
-
-function handleKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-}
-function updateSendBtn() {
-  const val = document.getElementById('chat-input').value.trim();
-  const btn = document.getElementById('send-btn');
-  btn.className = 'send-btn' + (val && !loading ? ' active' : '');
-}
-function sendQuick(text) {
-  document.getElementById('chat-input').value = text;
-  sendMessage();
-}
-
-async function sendMessage() {
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (!text || loading) return;
-  addMessage('user', text);
-  input.value = ''; updateSendBtn();
-  loading = true;
-  const loadingDiv = document.createElement('div');
-  loadingDiv.className = 'loading-dots';
-  loadingDiv.innerHTML = '<div class="dots-wrap"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div> Analyzing...';
-  loadingDiv.id = 'loading-indicator';
-  document.getElementById('messages').appendChild(loadingDiv);
-  document.getElementById('messages').scrollTop = 999999;
-
-  const accountContext = balances ? `\nAccount: ${session.accountId} (${session.isLive ? 'LIVE' : 'PAPER'})\nCash: $${balances?.cash?.cash_available?.toFixed(2)}\nPositions: ${positions.length}` : '';
-
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: 1000,
-        system: SYSTEM_PROMPT + accountContext,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
-      })
-    });
-    const data = await res.json();
-    const fullText = data.content?.map(b => b.text || '').join('') || 'Error getting response.';
-    const trade = parseTradeFromResponse(fullText);
-    const cleanText = cleanResponse(fullText);
-    document.getElementById('loading-indicator')?.remove();
-    addMessage('assistant', cleanText, trade);
-    if (trade) {
-      if (autoTrade) { await executeTrade(trade); }
-      else { showPendingTrade(trade); }
+// ── PROFIT/STOP MONITOR ────────────────────────────────────────────────────────
+function startProfitMonitor(){
+  profitMonitorTimer=setInterval(async()=>{
+    if(!session||killSwitchOn||!positions.length)return;
+    await loadAccountData();
+    for(const pos of positions){
+      if(!pos.cost_basis||!pos.market_value)continue;
+      const pnlPerContract=(pos.market_value-pos.cost_basis)/Math.abs(pos.quantity||1);
+      const contracts=Math.abs(pos.quantity||1);
+      if(pnlPerContract>=settings.profitTarget){
+        addLog(`💰 PROFIT TARGET HIT: ${pos.symbol} +$${pnlPerContract.toFixed(2)}/contract — closing`,'trade');
+        addMessage('assistant',`💰 Profit target hit on ${pos.symbol}!\n+$${(pnlPerContract*contracts).toFixed(2)} total · +$${pnlPerContract.toFixed(2)}/contract\nClosing position...`);
+        await closePositionAndRescan(pos,'profit');
+      } else if(pnlPerContract<=-settings.stopLoss){
+        addLog(`🛑 STOP-LOSS HIT: ${pos.symbol} -$${Math.abs(pnlPerContract).toFixed(2)}/contract — closing`,'stop');
+        addMessage('assistant',`🛑 Stop-loss hit on ${pos.symbol}\n-$${(Math.abs(pnlPerContract)*contracts).toFixed(2)} total · -$${Math.abs(pnlPerContract).toFixed(2)}/contract\nClosing position...`);
+        await closePositionAndRescan(pos,'loss');
+      }
     }
-  } catch(e) {
-    document.getElementById('loading-indicator')?.remove();
-    addMessage('assistant', 'Connection error: ' + e.message);
-  }
-  loading = false; updateSendBtn();
+  },60*1000); // check every 60 seconds
 }
 
-function showPendingTrade(trade) {
-  pendingTrade = trade;
-  const isLive = session?.isLive;
-  const el = document.getElementById('pending-trade');
-  el.className = 'pending-trade ' + (isLive ? 'live' : 'paper');
-  document.getElementById('pending-title').className = 'pending-title ' + (isLive ? 'live' : 'paper');
-  document.getElementById('pending-title').textContent = isLive ? '⚡ REAL MONEY TRADE — CONFIRM?' : '📄 PAPER TRADE — CONFIRM?';
-  document.getElementById('pending-detail').textContent = `${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type}${trade.limitPrice ? ` @ $${trade.limitPrice} limit` : ' (market)'} · exp ${trade.expiry}`;
-  document.getElementById('pending-reason').textContent = trade.reason ? `Reason: ${trade.reason}` : '';
-  const btn = document.getElementById('confirm-btn');
-  btn.className = 'confirm-btn ' + (isLive ? 'live' : 'paper');
-  btn.textContent = isLive ? '⚡ PLACE LIVE ORDER' : '📄 PLACE PAPER ORDER';
-  el.style.display = 'block';
-}
-
-function cancelTrade() {
-  pendingTrade = null;
-  document.getElementById('pending-trade').style.display = 'none';
-}
-
-async function executeTrade(trade) {
-  const t = trade || pendingTrade;
-  if (!t || !session) return;
-  cancelTrade();
-  try {
-    const optionSymbol = buildOptionSymbol(t.ticker, t.expiry, t.type, t.strike);
-    const orderBody = {
-      class: 'option', symbol: t.ticker, option_symbol: optionSymbol,
-      side: t.action.toLowerCase() === 'buy' ? 'buy_to_open' : 'sell_to_open',
-      quantity: String(t.contracts), type: t.orderType || 'market', duration: 'day',
-      ...(t.orderType === 'limit' && { price: String(t.limitPrice) }),
-    };
-    const res = await fetch(`${PROXY_URL}/accounts/${session.accountId}/orders`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.token}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'x-tradier-live': session.isLive ? 'true' : 'false',
-      },
-      body: new URLSearchParams(orderBody).toString(),
+async function closePositionAndRescan(pos,result){
+  const pnl=(pos.market_value-pos.cost_basis);
+  try{
+    const orderBody={class:'option',symbol:pos.symbol?.slice(0,6)?.trim(),option_symbol:pos.symbol,side:'sell_to_close',quantity:String(Math.abs(pos.quantity||1)),type:'market',duration:'day'};
+    await fetch(`${PROXY_URL}/accounts/${session.accountId}/orders`,{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${session.token}`,'Content-Type':'application/x-www-form-urlencoded','x-tradier-live':session.isLive?'true':'false'},
+      body:new URLSearchParams(orderBody).toString()
     });
-    const data = await res.json();
-    const orderId = data?.order?.id;
-    addMessage('assistant', `✅ Order placed!\nOrder ID: ${orderId}\n${t.action} ${t.contracts}x ${t.ticker} $${t.strike} ${t.type} (${t.orderType || 'market'})\nExpires: ${t.expiry}`);
-    setTimeout(loadAccountData, 2000);
-  } catch(e) {
-    addMessage('assistant', `❌ Order failed: ${e.message}`);
+    tradesToday++;
+    if(result==='profit'){wins++;dailyProfit+=pnl;}
+    else{losses++;dailyLoss+=Math.abs(pnl);}
+    updateDailyStats();
+    setTimeout(()=>{loadAccountData();},2000);
+    // Rescan immediately after closing
+    if(engineOn&&!killSwitchOn){
+      addLog('↺ Rescanning for next opportunity...','entry');
+      setTimeout(runScan,3000);
+    }
+  }catch(e){addMessage('assistant',`Failed to close ${pos.symbol}: ${e.message}`);}
+}
+
+function updateDailyStats(){
+  document.getElementById('daily-profit-display').textContent=`$${dailyProfit.toFixed(2)}`;
+  document.getElementById('daily-loss-display').textContent=`$${dailyLoss.toFixed(2)}`;
+  document.getElementById('trades-today-display').textContent=tradesToday;
+  document.getElementById('win-rate-display').textContent=tradesToday>0?Math.round(wins/tradesToday*100)+'%':'—';
+  const pct=Math.min(100,(dailyLoss/settings.dailyMax)*100);
+  document.getElementById('daily-marker').style.left=pct+'%';
+}
+
+// ── ENGINE ─────────────────────────────────────────────────────────────────────
+function toggleEngine(){
+  if(killSwitchOn){addLog('⛔ Kill switch active — disable it first','stop');return;}
+  engineOn=!engineOn;
+  document.getElementById('engine-toggle').className='toggle-track'+(engineOn?' on':'');
+  if(engineOn){startEngine();}else{stopEngine();}
+}
+
+function startEngine(){
+  updateEngineStatus('scanning','Starting...');
+  addLog('🟢 Scalp engine started','entry');
+  runScan();
+  const ms={'1min':60000,'5min':300000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
+  scanTimer=setInterval(()=>{if(engineOn&&!killSwitchOn)runScan();},ms);
+}
+
+function stopEngine(){
+  engineOn=false;clearInterval(scanTimer);scanTimer=null;
+  document.getElementById('engine-toggle').className='toggle-track';
+  updateEngineStatus('off','Inactive');
+  document.getElementById('next-scan-label').textContent='Engine stopped';
+}
+
+function updateEngineStatus(state,text){
+  document.getElementById('engine-dot').className='status-dot '+state;
+  document.getElementById('engine-status').textContent=text;
+}
+
+async function runScan(){
+  if(!session||killSwitchOn||!engineOn)return;
+  if(positions.length>=settings.maxPositions){
+    addLog(`⏭ Max positions (${settings.maxPositions}) reached — waiting`,'skip');return;
   }
+  if(dailyLoss>=settings.dailyMax){
+    addLog(`🛑 Daily loss limit $${settings.dailyMax} reached — stopping`,'stop');
+    stopEngine();return;
+  }
+  updateEngineStatus('scanning','Scanning...');
+  addLog(`🔍 Scanning: ${watchlist.join(', ')}`,'entry');
+  for(const ticker of watchlist){
+    if(!engineOn||killSwitchOn)break;
+    try{
+      const res=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({
+          model:CLAUDE_MODEL,max_tokens:300,
+          system:SYSTEM_PROMPT,
+          messages:[{role:'user',content:`Scalp scan: ${ticker}. Looking for a quick $1.00 profit per contract with $0.10 stop-loss. 1 contract. Is there a high confidence call or put right now? Respond ONLY with a <SCAN_RESULT> block.`}]
+        })
+      });
+      const data=await res.json();
+      const text=data.content?.map(b=>b.text||'').join('')||'';
+      const match=text.match(/<SCAN_RESULT>(.*?)<\/SCAN_RESULT>/s);
+      if(match){
+        const result=JSON.parse(match[1]);
+        if(result.signal!=='NONE'&&result.confidence==='HIGH'){
+          addLog(`✅ ${ticker}: ${result.signal} @ $${result.premium} — ${result.reason}`,'trade');
+          const trade={action:'BUY',type:result.signal.includes('CALL')?'CALL':'PUT',ticker,strike:result.strike,expiry:result.expiry,contracts:settings.contracts,orderType:'limit',limitPrice:result.premium,reason:result.reason};
+          await executeAutoTrade(trade);
+          break;
+        } else {
+          addLog(`⏭ ${ticker}: ${result.signal==='NONE'?'No signal':'Low confidence'} — ${result.reason}`,'skip');
+        }
+      }
+    }catch(e){addLog(`❌ ${ticker}: ${e.message}`,'stop');}
+  }
+  updateEngineStatus('on','Active — monitoring positions');
+  const ms={'1min':60000,'5min':300000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
+  document.getElementById('next-scan-label').textContent=`Next scan: ${new Date(Date.now()+ms).toLocaleTimeString()}`;
+}
+
+async function executeAutoTrade(trade){
+  if(!session||killSwitchOn)return;
+  try{
+    const sym=buildOptionSymbol(trade.ticker,trade.expiry,trade.type,trade.strike);
+    const body={class:'option',symbol:trade.ticker,option_symbol:sym,side:'buy_to_open',quantity:String(trade.contracts),type:trade.orderType||'limit',duration:'day',price:String(trade.limitPrice)};
+    const res=await fetch(`${PROXY_URL}/accounts/${session.accountId}/orders`,{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${session.token}`,'Content-Type':'application/x-www-form-urlencoded','x-tradier-live':session.isLive?'true':'false'},
+      body:new URLSearchParams(body).toString()
+    });
+    const data=await res.json();
+    const orderId=data?.order?.id;
+    addLog(`🚀 ORDER PLACED: ${trade.ticker} ${trade.type} $${trade.strike} @ $${trade.limitPrice} (ID: ${orderId})`,'trade');
+    addMessage('assistant',`🤖 Auto-trade placed!\n${trade.ticker} ${trade.type} $${trade.strike} @ $${trade.limitPrice} limit\nTarget: +$${settings.profitTarget} · Stop: -$${settings.stopLoss}\nOrder ID: ${orderId}`);
+    setTimeout(loadAccountData,2000);
+  }catch(e){addLog(`❌ Order failed: ${e.message}`,'stop');}
+}
+
+// ── KILL SWITCH ────────────────────────────────────────────────────────────────
+function toggleKillSwitch(){
+  killSwitchOn=!killSwitchOn;
+  const btn=document.getElementById('kill-btn');
+  if(killSwitchOn){
+    btn.className='kill-btn active';btn.textContent='⛔ KILL ACTIVE';
+    stopEngine();
+    addLog('🚨 KILL SWITCH ACTIVATED','stop');
+    addMessage('assistant','🚨 Kill switch activated. All auto-trading halted.');
+  }else{
+    btn.className='kill-btn';btn.textContent='🛑 KILL SWITCH';
+    addLog('✅ Kill switch deactivated','entry');
+  }
+}
+
+// ── WATCHLIST ──────────────────────────────────────────────────────────────────
+function renderWatchlist(){
+  document.getElementById('watchlist-grid').innerHTML=watchlist.map(t=>`<div class="watchlist-tag active">${t} <span onclick="removeTicker('${t}')" style="color:#3a6a9c;cursor:pointer;font-size:10px">✕</span></div>`).join('');
+}
+function addTicker(){
+  const i=document.getElementById('add-ticker-input');
+  const t=i.value.trim().toUpperCase();
+  if(t&&!watchlist.includes(t)){watchlist.push(t);renderWatchlist();}
+  i.value='';
+}
+function removeTicker(t){watchlist=watchlist.filter(x=>x!==t);renderWatchlist();}
+
+// ── SETTINGS ───────────────────────────────────────────────────────────────────
+function updateSettings(){
+  settings.profitTarget=parseFloat(document.getElementById('profit-target').value)||1.00;
+  settings.stopLoss=parseFloat(document.getElementById('stop-loss-dollar').value)||0.10;
+  settings.dailyMax=parseFloat(document.getElementById('daily-max').value)||500;
+  settings.contracts=parseInt(document.getElementById('contracts-per-trade').value)||1;
+  settings.maxPositions=parseInt(document.getElementById('max-positions').value)||3;
+  settings.schedule=document.getElementById('scan-schedule').value;
+  document.getElementById('daily-max-label').textContent=`$${settings.dailyMax} limit`;
+}
+
+// ── LOG ────────────────────────────────────────────────────────────────────────
+function addLog(text,type='entry'){
+  const now=new Date().toLocaleTimeString();
+  scanLog.unshift({text:`[${now}] ${text}`,type});
+  if(scanLog.length>100)scanLog.pop();
+  document.getElementById('scan-log').innerHTML=scanLog.map(l=>`<div class="log-entry log-${l.type}">${l.text}</div>`).join('');
+}
+
+// ── TABS ───────────────────────────────────────────────────────────────────────
+function switchTab(tab){
+  const tabs=['chat','autoinvest','positions','orders'];
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>{b.className='tab-btn'+(tabs[i]===tab?' active':'');});
+  document.getElementById('chat-panel').style.display=tab==='chat'?'flex':'none';
+  document.getElementById('autoinvest-panel').style.display=tab==='autoinvest'?'block':'none';
+  document.getElementById('positions-panel').style.display=tab==='positions'?'block':'none';
+  document.getElementById('orders-panel').style.display=tab==='orders'?'block':'none';
+  if(tab==='positions')loadAccountData();
+}
+
+// ── CHAT ───────────────────────────────────────────────────────────────────────
+function addMessage(role,content,trade=null){
+  if(role!=='system')messages.push({role,content});
+  const container=document.getElementById('messages');
+  const div=document.createElement('div');div.className=`message ${role}`;
+  let th='';
+  if(trade){th=`<div class="trade-signal"><div class="trade-signal-title">📋 TRADE SIGNAL</div><div class="trade-signal-detail">${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type} @ $${trade.limitPrice}</div><div class="trade-signal-exp">Expires: ${trade.expiry}</div></div>`;}
+  div.innerHTML=`<div class="msg-label">${role==='user'?'YOU':role==='system'?'SYSTEM':'OPTIONSAI'}</div><div class="msg-bubble">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}${th}</div>`;
+  container.appendChild(div);container.scrollTop=container.scrollHeight;
+  document.getElementById('quick-actions').style.display=messages.filter(m=>m.role==='user').length>1?'none':'flex';
+}
+
+function parseTradeFromResponse(t){const m=t.match(/<TRADE>(.*?)<\/TRADE>/s);if(m){try{return JSON.parse(m[1]);}catch{return null;}}return null;}
+function cleanResponse(t){return t.replace(/<TRADE>.*?<\/TRADE>/gs,'').replace(/<SCAN_RESULT>.*?<\/SCAN_RESULT>/gs,'').trim();}
+function buildOptionSymbol(ticker,expiry,type,strike){
+  const d=new Date(expiry);
+  return `${ticker.padEnd(6)}${String(d.getFullYear()).slice(2)}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}${type[0]}${String(Math.round(strike*1000)).padStart(8,'0')}`;
+}
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
+function updateSendBtn(){const v=document.getElementById('chat-input').value.trim();document.getElementById('send-btn').className='send-btn'+(v&&!loading?' active':'');}
+function sendQuick(t){document.getElementById('chat-input').value=t;sendMessage();}
+
+async function sendMessage(){
+  const input=document.getElementById('chat-input');
+  const text=input.value.trim();
+  if(!text||loading)return;
+  addMessage('user',text);input.value='';updateSendBtn();loading=true;
+  const ld=document.createElement('div');ld.className='loading-dots';ld.id='loading-indicator';
+  ld.innerHTML='<div class="dots-wrap"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div> Analyzing...';
+  document.getElementById('messages').appendChild(ld);document.getElementById('messages').scrollTop=999999;
+  const ctx=balances?`\nAccount: ${session.accountId}\nCash: $${balances?.cash?.cash_available?.toFixed(2)}\nPositions: ${positions.length}/${settings.maxPositions}\nProfit target: $${settings.profitTarget}/contract\nStop-loss: $${settings.stopLoss}/contract\nDaily loss: $${dailyLoss.toFixed(2)}/$${settings.dailyMax}`:'';
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:CLAUDE_MODEL,max_tokens:1000,system:SYSTEM_PROMPT+ctx,messages:messages.map(m=>({role:m.role,content:m.content}))})
+    });
+    const data=await res.json();
+    const fullText=data.content?.map(b=>b.text||'').join('')||'Error.';
+    const trade=parseTradeFromResponse(fullText);
+    const clean=cleanResponse(fullText);
+    document.getElementById('loading-indicator')?.remove();
+    addMessage('assistant',clean,trade);
+    if(trade)showPendingTrade(trade);
+  }catch(e){document.getElementById('loading-indicator')?.remove();addMessage('assistant','Error: '+e.message);}
+  loading=false;updateSendBtn();
+}
+
+function showPendingTrade(trade){
+  pendingTrade=trade;const isLive=session?.isLive;
+  const el=document.getElementById('pending-trade');
+  el.className='pending-trade '+(isLive?'live':'paper');
+  document.getElementById('pending-title').className='pending-title '+(isLive?'live':'paper');
+  document.getElementById('pending-title').textContent=isLive?'⚡ REAL MONEY — CONFIRM?':'📄 PAPER TRADE — CONFIRM?';
+  document.getElementById('pending-detail').textContent=`${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type} @ $${trade.limitPrice} · exp ${trade.expiry}`;
+  document.getElementById('pending-reason').textContent=trade.reason?`Reason: ${trade.reason}`:'';
+  const btn=document.getElementById('confirm-btn');
+  btn.className='confirm-btn '+(isLive?'live':'paper');
+  btn.textContent=isLive?'⚡ PLACE LIVE ORDER':'📄 PLACE PAPER ORDER';
+  el.style.display='block';
+}
+function cancelTrade(){pendingTrade=null;document.getElementById('pending-trade').style.display='none';}
+
+async function executeTrade(){
+  const t=pendingTrade;if(!t||!session)return;
+  if(killSwitchOn){addMessage('assistant','⛔ Kill switch active.');return;}
+  cancelTrade();
+  try{
+    const sym=buildOptionSymbol(t.ticker,t.expiry,t.type,t.strike);
+    const body={class:'option',symbol:t.ticker,option_symbol:sym,side:t.action.toLowerCase()==='buy'?'buy_to_open':'sell_to_open',quantity:String(t.contracts),type:t.orderType||'limit',duration:'day',...(t.limitPrice&&{price:String(t.limitPrice)})};
+    const res=await fetch(`${PROXY_URL}/accounts/${session.accountId}/orders`,{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${session.token}`,'Content-Type':'application/x-www-form-urlencoded','x-tradier-live':session.isLive?'true':'false'},
+      body:new URLSearchParams(body).toString()
+    });
+    const data=await res.json();
+    addMessage('assistant',`✅ Order placed! ID: ${data?.order?.id}\n${t.action} ${t.contracts}x ${t.ticker} $${t.strike} ${t.type}\nTarget: +$${settings.profitTarget} · Stop: -$${settings.stopLoss}`);
+    setTimeout(loadAccountData,2000);
+  }catch(e){addMessage('assistant',`❌ Order failed: ${e.message}`);}
 }
 </script>
 </body>
