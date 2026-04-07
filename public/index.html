@@ -322,7 +322,8 @@
 </div>
 
 <script>
-const PROXY_URL    = 'https://optionsai-proxy-production.up.railway.app/tradier';
+const PROXY_URL = '/tradier';
+const API_URL  = '';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const SYSTEM_PROMPT = `You are OptionsAI, a scalping bot inspired by Paul Rotter's legitimate scalping principles. You receive REAL-TIME market data and apply strict entry rules.
 
@@ -423,6 +424,8 @@ async function handleConnect(){
     const accountId=data.profile?.account?.account_number||data.profile?.accounts?.account?.[0]?.account_number;
     session={token,accountId,isLive,name:data.profile?.name||'Trader'};
     saveTokenIfRemember(token,currentMode);
+    // Save session to server so engine can trade without browser
+    await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,accountId,isLive,name:session.name})}).catch(()=>{});
     startApp();
   }catch(e){
     showError(e.message);btn.disabled=false;
@@ -438,10 +441,11 @@ function startApp(){
   const badge=document.getElementById('mode-badge');
   badge.textContent=(session.isLive?'🔴 LIVE · ':'📄 PAPER · ')+session.accountId;
   badge.className='mode-badge '+(session.isLive?'live':'paper');
-  addMessage('assistant',`Connected to Tradier ${session.isLive?'LIVE':'paper'} (${session.accountId}). Welcome, ${session.name}!\n\nScalping bot ready. Go to Auto-Invest tab to enable continuous trading with $1.00 profit targets and $0.10 stop-losses.`);
+  addMessage('assistant',`Connected to Tradier ${session.isLive?'LIVE':'paper'} (${session.accountId}). Welcome, ${session.name}!\n\n✅ Server-side engine active — the bot will keep trading even if you close this browser tab.\n\nGo to the Auto-Invest tab to configure and enable.`);
   renderWatchlist();
   loadAccountData();
-  startProfitMonitor();
+  loadServerState();
+  startLogPoller();
 }
 
 function disconnect(){
@@ -517,7 +521,9 @@ function renderPositions(){
 
 // ── PROFIT/STOP MONITOR ────────────────────────────────────────────────────────
 function startProfitMonitor(){
-  profitMonitorTimer=setInterval(async()=>{
+  // Now handled server-side — keeping function stub
+  return;
+  setInterval(async()=>{
     if(!session||killSwitchOn||!positions.length)return;
     await loadAccountData();
     for(const pos of positions){
@@ -569,26 +575,31 @@ function updateDailyStats(){
 }
 
 // ── ENGINE ─────────────────────────────────────────────────────────────────────
-function toggleEngine(){
+async function toggleEngine(){
   if(killSwitchOn){addLog('⛔ Kill switch active — disable it first','stop');return;}
   engineOn=!engineOn;
   document.getElementById('engine-toggle').className='toggle-track'+(engineOn?' on':'');
-  if(engineOn){startEngine();}else{stopEngine();}
+  // Save settings to server first
+  await saveSettingsToServer();
+  // Tell server to start/stop engine
+  const res=await fetch('/api/engine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on:engineOn})});
+  const data=await res.json();
+  if(engineOn){
+    updateEngineStatus('scanning','Running on server ☁️');
+    addLog('🟢 Engine started — running on server (browser can be closed)','entry');
+    document.getElementById('next-scan-label').textContent='Engine running on server ☁️';
+  }else{
+    updateEngineStatus('off','Inactive');
+    addLog('🔴 Engine stopped','entry');
+    document.getElementById('next-scan-label').textContent='Engine stopped';
+  }
 }
 
-function startEngine(){
-  updateEngineStatus('scanning','Starting...');
-  addLog('🟢 Scalp engine started','entry');
-  runScan();
-  const ms={'1min':60000,'2min':120000,'5min':300000,'10min':600000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
-  scanTimer=setInterval(()=>{if(engineOn&&!killSwitchOn)runScan();},ms);
-}
-
+function startEngine(){}
 function stopEngine(){
-  engineOn=false;clearInterval(scanTimer);scanTimer=null;
+  engineOn=false;
   document.getElementById('engine-toggle').className='toggle-track';
   updateEngineStatus('off','Inactive');
-  document.getElementById('next-scan-label').textContent='Engine stopped';
 }
 
 function updateEngineStatus(state,text){
@@ -596,7 +607,7 @@ function updateEngineStatus(state,text){
   document.getElementById('engine-status').textContent=text;
 }
 
-const QUOTE_URL = 'https://optionsai-proxy-production.up.railway.app/quote';
+const QUOTE_URL = '/quote';
 
 async function fetchLiveData(ticker){
   try{
@@ -729,14 +740,15 @@ async function executeAutoTrade(trade){
 }
 
 // ── KILL SWITCH ────────────────────────────────────────────────────────────────
-function toggleKillSwitch(){
+async function toggleKillSwitch(){
   killSwitchOn=!killSwitchOn;
   const btn=document.getElementById('kill-btn');
+  await fetch('/api/killswitch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on:killSwitchOn})});
   if(killSwitchOn){
     btn.className='kill-btn active';btn.textContent='⛔ KILL ACTIVE';
     stopEngine();
-    addLog('🚨 KILL SWITCH ACTIVATED','stop');
-    addMessage('assistant','🚨 Kill switch activated. All auto-trading halted.');
+    addLog('🚨 KILL SWITCH ACTIVATED — server engine halted','stop');
+    addMessage('assistant','🚨 Kill switch activated. Server engine halted.');
   }else{
     btn.className='kill-btn';btn.textContent='🛑 KILL SWITCH';
     addLog('✅ Kill switch deactivated','entry');
@@ -744,6 +756,66 @@ function toggleKillSwitch(){
 }
 
 // ── WATCHLIST ──────────────────────────────────────────────────────────────────
+// ── SERVER SYNC ────────────────────────────────────────────────────────────────
+async function loadServerState(){
+  try{
+    const res=await fetch('/api/state');
+    const state=await res.json();
+    engineOn=state.engineOn||false;
+    killSwitchOn=state.killSwitch||false;
+    if(state.settings){
+      settings=state.settings;
+      document.getElementById('profit-target').value=settings.profitTarget||1.00;
+      document.getElementById('stop-loss-dollar').value=settings.stopLoss||0.10;
+      document.getElementById('daily-max').value=settings.dailyMax||500;
+      document.getElementById('contracts-per-trade').value=settings.contracts||1;
+      document.getElementById('max-positions').value=settings.maxPositions||3;
+      document.getElementById('scan-schedule').value=settings.schedule||'5min';
+    }
+    if(state.watchlist){watchlist=state.watchlist;renderWatchlist();}
+    document.getElementById('engine-toggle').className='toggle-track'+(engineOn?' on':'');
+    document.getElementById('kill-btn').className=killSwitchOn?'kill-btn active':'kill-btn';
+    document.getElementById('kill-btn').textContent=killSwitchOn?'⛔ KILL ACTIVE':'🛑 KILL SWITCH';
+    if(engineOn){
+      updateEngineStatus('on','Running on server ☁️');
+      document.getElementById('next-scan-label').textContent='Engine running on server ☁️';
+    }
+    document.getElementById('daily-loss-display').textContent=`$${(state.dailyLoss||0).toFixed(2)}`;
+  }catch(e){console.error('loadServerState:',e);}
+}
+
+async function saveSettingsToServer(){
+  try{
+    await fetch('/api/settings',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({settings,watchlist})
+    });
+  }catch(e){console.error('saveSettings:',e);}
+}
+
+let logPoller=null;
+let lastLogTs=null;
+function startLogPoller(){
+  if(logPoller)clearInterval(logPoller);
+  logPoller=setInterval(async()=>{
+    try{
+      const res=await fetch('/api/logs');
+      const logs=await res.json();
+      if(!logs.length)return;
+      const newest=logs[0]?.ts;
+      if(newest===lastLogTs)return;
+      lastLogTs=newest;
+      const el=document.getElementById('scan-log');
+      el.innerHTML=logs.map(l=>{
+        const type=l.type==='trade'?'log-trade':l.type==='stop'?'log-stop':l.type==='skip'?'log-skip':'log-entry';
+        const time=new Date(l.ts).toLocaleTimeString();
+        return `<div class="log-entry ${type}">[${time}] ${l.message}</div>`;
+      }).join('');
+    }catch(e){}
+  },5000); // poll every 5 seconds
+}
+
 function renderWatchlist(){
   document.getElementById('watchlist-grid').innerHTML=watchlist.map(t=>`<div class="watchlist-tag active">${t} <span onclick="removeTicker('${t}')" style="color:#3a6a9c;cursor:pointer;font-size:10px">✕</span></div>`).join('');
 }
@@ -764,6 +836,7 @@ function updateSettings(){
   settings.maxPositions=parseInt(document.getElementById('max-positions').value)||3;
   settings.schedule=document.getElementById('scan-schedule').value;
   document.getElementById('daily-max-label').textContent=`$${settings.dailyMax} limit`;
+  saveSettingsToServer();
 }
 
 // ── LOG ────────────────────────────────────────────────────────────────────────
