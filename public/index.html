@@ -528,6 +528,25 @@ function updateEngineStatus(state,text){
   document.getElementById('engine-status').textContent=text;
 }
 
+async function scanTicker(ticker){
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({
+        model:CLAUDE_MODEL,max_tokens:300,
+        system:SYSTEM_PROMPT,
+        messages:[{role:'user',content:`Scalp scan: ${ticker}. Looking for a quick $${settings.profitTarget} profit per contract with $${settings.stopLoss} stop-loss. ${settings.contracts} contract(s). High confidence call or put right now? Respond ONLY with a <SCAN_RESULT> block.`}]
+      })
+    });
+    const data=await res.json();
+    const text=data.content?.map(b=>b.text||'').join('')||'';
+    const match=text.match(/<SCAN_RESULT>(.*?)<\/SCAN_RESULT>/s);
+    if(match){const result=JSON.parse(match[1]);return{ticker,...result};}
+  }catch(e){addLog(`❌ ${ticker}: ${e.message}`,'stop');}
+  return{ticker,signal:'NONE',confidence:'LOW',reason:'scan failed'};
+}
+
 async function runScan(){
   if(!session||killSwitchOn||!engineOn)return;
   if(positions.length>=settings.maxPositions){
@@ -537,36 +556,32 @@ async function runScan(){
     addLog(`🛑 Daily loss limit $${settings.dailyMax} reached — stopping`,'stop');
     stopEngine();return;
   }
-  updateEngineStatus('scanning','Scanning...');
-  addLog(`🔍 Scanning: ${watchlist.join(', ')}`,'entry');
-  for(const ticker of watchlist){
-    if(!engineOn||killSwitchOn)break;
-    try{
-      const res=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({
-          model:CLAUDE_MODEL,max_tokens:300,
-          system:SYSTEM_PROMPT,
-          messages:[{role:'user',content:`Scalp scan: ${ticker}. Looking for a quick $1.00 profit per contract with $0.10 stop-loss. 1 contract. Is there a high confidence call or put right now? Respond ONLY with a <SCAN_RESULT> block.`}]
-        })
-      });
-      const data=await res.json();
-      const text=data.content?.map(b=>b.text||'').join('')||'';
-      const match=text.match(/<SCAN_RESULT>(.*?)<\/SCAN_RESULT>/s);
-      if(match){
-        const result=JSON.parse(match[1]);
-        if(result.signal!=='NONE'&&result.confidence==='HIGH'){
-          addLog(`✅ ${ticker}: ${result.signal} @ $${result.premium} — ${result.reason}`,'trade');
-          const trade={action:'BUY',type:result.signal.includes('CALL')?'CALL':'PUT',ticker,strike:result.strike,expiry:result.expiry,contracts:settings.contracts,orderType:'limit',limitPrice:result.premium,reason:result.reason};
-          await executeAutoTrade(trade);
-          break;
-        } else {
-          addLog(`⏭ ${ticker}: ${result.signal==='NONE'?'No signal':'Low confidence'} — ${result.reason}`,'skip');
-        }
-      }
-    }catch(e){addLog(`❌ ${ticker}: ${e.message}`,'stop');}
+  updateEngineStatus('scanning',`Scanning ${watchlist.length} tickers in parallel...`);
+  addLog(`🔍 Parallel scan (${watchlist.length} tickers): ${watchlist.join(', ')}`,'entry');
+
+  // Fire ALL tickers simultaneously
+  const results=await Promise.all(watchlist.map(t=>scanTicker(t)));
+
+  // Log every result
+  results.forEach(r=>{
+    if(r.signal!=='NONE'&&r.confidence==='HIGH'){
+      addLog(`✅ ${r.ticker}: ${r.signal} @ $${r.premium} — ${r.reason}`,'trade');
+    }else{
+      addLog(`⏭ ${r.ticker}: ${r.signal==='NONE'?'No signal':r.confidence+' conf'} — ${r.reason}`,'skip');
+    }
+  });
+
+  // Pick best HIGH confidence signal (highest premium = most liquid)
+  const signals=results.filter(r=>r.signal!=='NONE'&&r.confidence==='HIGH');
+  if(signals.length>0&&!killSwitchOn&&engineOn){
+    const best=signals.sort((a,b)=>(b.premium||0)-(a.premium||0))[0];
+    addLog(`🏆 Best signal: ${best.ticker} ${best.signal} — placing order`,'trade');
+    const trade={action:'BUY',type:best.signal.includes('CALL')?'CALL':'PUT',ticker:best.ticker,strike:best.strike,expiry:best.expiry,contracts:settings.contracts,orderType:'limit',limitPrice:best.premium,reason:best.reason};
+    await executeAutoTrade(trade);
+  }else{
+    addLog(`💤 No HIGH confidence signals across ${watchlist.length} tickers`,'skip');
   }
+
   updateEngineStatus('on','Active — monitoring positions');
   const ms={'1min':60000,'5min':300000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
   document.getElementById('next-scan-label').textContent=`Next scan: ${new Date(Date.now()+ms).toLocaleTimeString()}`;
