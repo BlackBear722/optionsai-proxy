@@ -262,7 +262,9 @@
         <span>Scan interval</span>
         <select class="setting-input" id="scan-schedule" onchange="updateSettings()" style="width:110px">
           <option value="1min">Every 1 min</option>
+          <option value="2min">Every 2 min</option>
           <option value="5min" selected>Every 5 min</option>
+          <option value="10min">Every 10 min</option>
           <option value="15min">Every 15 min</option>
           <option value="30min">Every 30 min</option>
         </select>
@@ -327,7 +329,6 @@ const SYSTEM_PROMPT = `You are OptionsAI, a scalping bot inspired by Paul Rotter
 ROTTER-STYLE ENTRY RULES — ALL must be met for HIGH confidence:
 
 CALL setup:
-- inPrimeWindow: true (first 2 hours of market open — highest liquidity)
 - consecutiveBull >= 3 (3+ bullish 5m candles in a row — confirmed momentum)
 - barVolumeRatio >= 2.0 (current bar volume at least 2x average — volume spike confirms move)
 - price > vwap (trading above fair value)
@@ -337,7 +338,6 @@ CALL setup:
 - changePct > 0.2 (actually moving up today)
 
 PUT setup:
-- inPrimeWindow: true
 - consecutiveBear >= 3 (3+ bearish 5m candles in a row)
 - barVolumeRatio >= 2.0 (volume spike)
 - price < vwap (trading below fair value)
@@ -347,7 +347,6 @@ PUT setup:
 - changePct < -0.2 (actually moving down today)
 
 ALWAYS skip if:
-- inPrimeWindow is false (outside first 2 hours — too risky)
 - spreadEstPct > 0.8 (wide spread eats profit)
 - barVolumeRatio < 1.5 (no volume confirmation)
 - RSI > 75 or RSI < 25 (extreme levels — reversal risk)
@@ -581,7 +580,7 @@ function startEngine(){
   updateEngineStatus('scanning','Starting...');
   addLog('🟢 Scalp engine started','entry');
   runScan();
-  const ms={'1min':60000,'5min':300000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
+  const ms={'1min':60000,'2min':120000,'5min':300000,'10min':600000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
   scanTimer=setInterval(()=>{if(engineOn&&!killSwitchOn)runScan();},ms);
 }
 
@@ -642,8 +641,6 @@ async function scanTicker(ticker){
       const bull=liveData.consecutiveBull||0;
       const bear=liveData.consecutiveBear||0;
       const prime=liveData.inPrimeWindow;
-      // Skip if not in prime window
-      if(!prime){addLog(`⏭ ${ticker}: Outside prime window (${liveData.minutesIntoDay}min into session)`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'outside prime trading window',liveData};}
       // Skip if spread too wide
       if(spread>0.8){addLog(`⏭ ${ticker}: Spread too wide (${spread}%) — unliquid`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'spread too wide',liveData};}
       // Skip if no volume spike
@@ -709,7 +706,7 @@ async function runScan(){
   }
 
   updateEngineStatus('on','Active — monitoring positions');
-  const ms={'1min':60000,'5min':300000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
+  const ms={'1min':60000,'2min':120000,'5min':300000,'10min':600000,'15min':900000,'30min':1800000}[settings.schedule]||300000;
   document.getElementById('next-scan-label').textContent=`Next scan: ${new Date(Date.now()+ms).toLocaleTimeString()}`;
 }
 
