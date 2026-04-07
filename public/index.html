@@ -155,6 +155,11 @@
       <div class="label" id="token-label">Tradier Paper API Token</div>
       <input type="password" class="field-input" id="token-input" placeholder="Paste your Tradier API token..." onkeydown="if(event.key==='Enter')handleConnect()"/>
       <div class="field-hint">Get token at <a href="https://developer.tradier.com" target="_blank">developer.tradier.com</a> → Applications → Access Token</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+        <input type="checkbox" id="remember-token" style="accent-color:#00d4ff;cursor:pointer" onchange="toggleRemember()">
+        <label for="remember-token" style="font-size:11px;color:#3a6a9c;cursor:pointer">Remember token on this device</label>
+        <span id="saved-indicator" style="font-size:10px;color:#00aa55;display:none">✓ Saved</span>
+      </div>
     </div>
     <div class="error-box" id="error-box" style="display:none"></div>
     <button class="connect-btn" id="connect-btn" onclick="handleConnect()">CONNECT TO TRADIER PAPER</button>
@@ -322,6 +327,36 @@ When placing a trade respond ONLY with: <TRADE>{"action":"BUY" or "SELL","type":
 For auto-scan respond ONLY with: <SCAN_RESULT>{"ticker":"SYMBOL","signal":"BUY_CALL" or "BUY_PUT" or "NONE","confidence":"HIGH" or "MEDIUM" or "LOW","strike":0,"expiry":"YYYY-MM-DD","premium":0.00,"reason":"brief"}</SCAN_RESULT>
 Focus on short-term momentum. Suggest limit orders near current ask. Be direct and concise.`;
 
+// ── TOKEN STORAGE ──────────────────────────────────────────────────────────────
+function loadSavedToken(){
+  try{
+    const saved=localStorage.getItem('optionsai_token');
+    const savedMode=localStorage.getItem('optionsai_mode');
+    if(saved){
+      document.getElementById('token-input').value=saved;
+      document.getElementById('remember-token').checked=true;
+      document.getElementById('saved-indicator').style.display='inline';
+      if(savedMode)setMode(savedMode);
+    }
+  }catch(e){}
+}
+function toggleRemember(){
+  const checked=document.getElementById('remember-token').checked;
+  if(!checked){
+    try{localStorage.removeItem('optionsai_token');localStorage.removeItem('optionsai_mode');}catch(e){}
+    document.getElementById('saved-indicator').style.display='none';
+  }
+}
+function saveTokenIfRemember(token,mode){
+  try{
+    if(document.getElementById('remember-token').checked){
+      localStorage.setItem('optionsai_token',token);
+      localStorage.setItem('optionsai_mode',mode);
+    }
+  }catch(e){}
+}
+window.addEventListener('load',loadSavedToken);
+
 // State
 let session=null,messages=[],pendingTrade=null,balances=null,positions=[],currentMode='paper',loading=false;
 let engineOn=false,killSwitchOn=false,scanTimer=null,profitMonitorTimer=null;
@@ -355,6 +390,7 @@ async function handleConnect(){
     const data=await res.json();
     const accountId=data.profile?.account?.account_number||data.profile?.accounts?.account?.[0]?.account_number;
     session={token,accountId,isLive,name:data.profile?.name||'Trader'};
+    saveTokenIfRemember(token,currentMode);
     startApp();
   }catch(e){
     showError(e.message);btn.disabled=false;
