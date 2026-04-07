@@ -1,11 +1,20 @@
 const express = require('express');
-const cors = require('cors');
 const fetch = require('node-fetch');
 const app = express();
 
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Handle CORS manually for all requests
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-tradier-live, ngrok-skip-browser-warning');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 app.use('/tradier', async (req, res) => {
   const isLive = req.headers['x-tradier-live'] === 'true';
@@ -43,4 +52,5 @@ app.use('/tradier', async (req, res) => {
 
 app.get('/', (req, res) => res.send('OptionsAI proxy is running ✅'));
 
-app.listen(3001, () => console.log('✅ OptionsAI proxy running at http://localhost:3001'));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`✅ OptionsAI proxy running on port ${PORT}`));
