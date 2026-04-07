@@ -322,10 +322,43 @@
 <script>
 const PROXY_URL    = 'https://optionsai-proxy-production.up.railway.app/tradier';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-const SYSTEM_PROMPT = `You are OptionsAI, a scalping bot assistant for options trading on Tradier.
+const SYSTEM_PROMPT = `You are OptionsAI, a scalping bot inspired by Paul Rotter's legitimate scalping principles. You receive REAL-TIME market data and apply strict entry rules.
+
+ROTTER-STYLE ENTRY RULES — ALL must be met for HIGH confidence:
+
+CALL setup:
+- inPrimeWindow: true (first 2 hours of market open — highest liquidity)
+- consecutiveBull >= 3 (3+ bullish 5m candles in a row — confirmed momentum)
+- barVolumeRatio >= 2.0 (current bar volume at least 2x average — volume spike confirms move)
+- price > vwap (trading above fair value)
+- price > ma9 (above fast intraday MA)
+- RSI between 45-65 (momentum but not overbought)
+- spreadEstPct < 0.5 (tight spread — liquid enough to scalp)
+- changePct > 0.2 (actually moving up today)
+
+PUT setup:
+- inPrimeWindow: true
+- consecutiveBear >= 3 (3+ bearish 5m candles in a row)
+- barVolumeRatio >= 2.0 (volume spike)
+- price < vwap (trading below fair value)
+- price < ma9 (below fast intraday MA)
+- RSI between 35-55 (momentum but not oversold)
+- spreadEstPct < 0.5 (tight spread)
+- changePct < -0.2 (actually moving down today)
+
+ALWAYS skip if:
+- inPrimeWindow is false (outside first 2 hours — too risky)
+- spreadEstPct > 0.8 (wide spread eats profit)
+- barVolumeRatio < 1.5 (no volume confirmation)
+- RSI > 75 or RSI < 25 (extreme levels — reversal risk)
+
+Strike: nearest ATM strike to current price
+Expiry: nearest Friday at least 2 days out
+Premium: estimate 0.5-2% of stock price for ATM options
+
 When placing a trade respond ONLY with: <TRADE>{"action":"BUY" or "SELL","type":"CALL" or "PUT","ticker":"SYMBOL","strike":000,"expiry":"YYYY-MM-DD","contracts":1,"orderType":"limit","limitPrice":0.00,"reason":"brief"}</TRADE>
-For auto-scan respond ONLY with: <SCAN_RESULT>{"ticker":"SYMBOL","signal":"BUY_CALL" or "BUY_PUT" or "NONE","confidence":"HIGH" or "MEDIUM" or "LOW","strike":0,"expiry":"YYYY-MM-DD","premium":0.00,"reason":"brief"}</SCAN_RESULT>
-Focus on short-term momentum. Suggest limit orders near current ask. Be direct and concise.`;
+For auto-scan respond ONLY with: <SCAN_RESULT>{"ticker":"SYMBOL","signal":"BUY_CALL" or "BUY_PUT" or "NONE","confidence":"HIGH" or "MEDIUM" or "LOW","strike":0,"expiry":"YYYY-MM-DD","premium":0.00,"reason":"key data: RSI/vol/candles"}</SCAN_RESULT>
+Be extremely strict. Most scans should return NONE. Only HIGH when every single rule is met.`;
 
 // ── TOKEN STORAGE ──────────────────────────────────────────────────────────────
 function loadSavedToken(){
@@ -564,21 +597,78 @@ function updateEngineStatus(state,text){
   document.getElementById('engine-status').textContent=text;
 }
 
+const QUOTE_URL = 'https://optionsai-proxy-production.up.railway.app/quote';
+
+async function fetchLiveData(ticker){
+  try{
+    const res=await fetch(`${QUOTE_URL}/${ticker}`);
+    if(!res.ok)return null;
+    return await res.json();
+  }catch(e){
+    console.error(`Failed to fetch data for ${ticker}:`,e);
+    return null;
+  }
+}
+
+function formatDataForClaude(d){
+  if(!d)return 'No live data available.';
+  const candleStr=d.last3Candles?.map(c=>`${c.bullish?'🟢':'🔴'} O:${c.open} C:${c.close} Vol:${(c.vol/1000).toFixed(0)}k`).join(' | ')||'N/A';
+  return `LIVE ROTTER SCAN DATA for ${d.ticker}:
+Price: $${d.price} (${d.changePct>0?'+':''}${d.changePct}% today)
+RSI(14): ${d.rsi||'N/A'}
+VWAP: $${d.vwap||'N/A'} | Price vs VWAP: ${d.vwap?parseFloat(d.price)>parseFloat(d.vwap)?'ABOVE ✅':'BELOW ✅':'N/A'}
+MA9(5m): $${d.ma9||'N/A'} | MA20: $${d.ma20||'N/A'} | MA50: $${d.ma50||'N/A'}
+Volume today: ${d.volume?(d.volume/1000000).toFixed(2)+'M':'N/A'} (${d.volumeRatio}x daily avg)
+Last bar volume ratio: ${d.barVolumeRatio}x average bar ← KEY for Rotter entry
+Spread estimate: ${d.spreadEstPct}% of price
+Consecutive BULL candles: ${d.consecutiveBull} | Consecutive BEAR candles: ${d.consecutiveBear}
+Last 3 x 5m candles: ${candleStr}
+Intraday range: $${d.intradayLow} - $${d.intradayHigh}
+Prime window (first 2hrs): ${d.inPrimeWindow?'YES ✅':'NO ❌'} (${d.minutesIntoDay}min into session)
+Market state: ${d.marketState||'UNKNOWN'}`;
+}
+
 async function scanTicker(ticker){
   try{
+    // Fetch live market data first
+    const liveData=await fetchLiveData(ticker);
+    const dataStr=formatDataForClaude(liveData);
+
+    // Pre-filter: skip Claude call if basic Rotter rules already fail (saves API calls)
+    if(liveData){
+      const rsi=parseFloat(liveData.rsi)||50;
+      const bvr=parseFloat(liveData.barVolumeRatio)||0;
+      const spread=parseFloat(liveData.spreadEstPct)||99;
+      const bull=liveData.consecutiveBull||0;
+      const bear=liveData.consecutiveBear||0;
+      const prime=liveData.inPrimeWindow;
+      // Skip if not in prime window
+      if(!prime){addLog(`⏭ ${ticker}: Outside prime window (${liveData.minutesIntoDay}min into session)`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'outside prime trading window',liveData};}
+      // Skip if spread too wide
+      if(spread>0.8){addLog(`⏭ ${ticker}: Spread too wide (${spread}%) — unliquid`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'spread too wide',liveData};}
+      // Skip if no volume spike
+      if(bvr<1.5){addLog(`⏭ ${ticker}: No volume spike (${bvr}x) — no confirmation`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'insufficient volume',liveData};}
+      // Skip if no consecutive candles
+      if(bull<2&&bear<2){addLog(`⏭ ${ticker}: No momentum (${bull} bull, ${bear} bear candles)`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'no directional momentum',liveData};}
+      // Skip extreme RSI
+      if(rsi>75||rsi<25){addLog(`⏭ ${ticker}: Extreme RSI (${rsi}) — reversal risk`,'skip');return{ticker,signal:'NONE',confidence:'LOW',reason:'extreme RSI',liveData};}
+    }
+
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:CLAUDE_MODEL,max_tokens:300,
         system:SYSTEM_PROMPT,
-        messages:[{role:'user',content:`Scalp scan: ${ticker}. Looking for a quick $${settings.profitTarget} profit per contract with $${settings.stopLoss} stop-loss. ${settings.contracts} contract(s). High confidence call or put right now? Respond ONLY with a <SCAN_RESULT> block.`}]
+        messages:[{role:'user',content:`${dataStr}
+
+Based on this live data, should I scalp ${ticker} for a $${settings.profitTarget} profit target with $${settings.stopLoss} stop-loss? ${settings.contracts} contract(s). Respond ONLY with a <SCAN_RESULT> block.`}]
       })
     });
     const data=await res.json();
     const text=data.content?.map(b=>b.text||'').join('')||'';
     const match=text.match(/<SCAN_RESULT>(.*?)<\/SCAN_RESULT>/s);
-    if(match){const result=JSON.parse(match[1]);return{ticker,...result};}
+    if(match){const result=JSON.parse(match[1]);return{ticker,...result,liveData};}
   }catch(e){addLog(`❌ ${ticker}: ${e.message}`,'stop');}
   return{ticker,signal:'NONE',confidence:'LOW',reason:'scan failed'};
 }
@@ -593,7 +683,7 @@ async function runScan(){
     stopEngine();return;
   }
   updateEngineStatus('scanning',`Scanning ${watchlist.length} tickers in parallel...`);
-  addLog(`🔍 Parallel scan (${watchlist.length} tickers): ${watchlist.join(', ')}`,'entry');
+  addLog(`🔍 Fetching live data + parallel scan (${watchlist.length} tickers): ${watchlist.join(', ')}`,'entry');
 
   // Fire ALL tickers simultaneously
   const results=await Promise.all(watchlist.map(t=>scanTicker(t)));
@@ -601,9 +691,9 @@ async function runScan(){
   // Log every result
   results.forEach(r=>{
     if(r.signal!=='NONE'&&r.confidence==='HIGH'){
-      addLog(`✅ ${r.ticker}: ${r.signal} @ $${r.premium} — ${r.reason}`,'trade');
+      addLog(`✅ ${r.ticker}: ${r.signal} @ $${r.premium} | RSI:${r.liveData?.rsi||'?'} Vol:${r.liveData?.volumeRatio||'?'}x — ${r.reason}`,'trade');
     }else{
-      addLog(`⏭ ${r.ticker}: ${r.signal==='NONE'?'No signal':r.confidence+' conf'} — ${r.reason}`,'skip');
+      addLog(`⏭ ${r.ticker}: ${r.signal==='NONE'?'No signal':r.confidence+' conf'} | RSI:${r.liveData?.rsi||'?'} ${r.liveData?.changePct||'?'}% — ${r.reason}`,'skip');
     }
   });
 
