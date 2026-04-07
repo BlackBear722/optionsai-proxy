@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OptionsAI — Tradier Trading Bot</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    background: #080c10;
+    color: #c8d8e8;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: #080c10; }
+  ::-webkit-scrollbar-thumb { background: #1a3a5c; border-radius: 2px; }
+  @keyframes pulse {
+    0%, 100% { opacity: .3; transform: scale(.8); }
+    50% { opacity: 1; transform: scale(1); }
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #00d4ff; display: inline-block; }
+  .dot:nth-child(1) { animation: pulse 1s 0s infinite; }
+  .dot:nth-child(2) { animation: pulse 1s 0.2s infinite; }
+  .dot:nth-child(3) { animation: pulse 1s 0.4s infinite; }
+
+  /* SETUP SCREEN */
+  #setup-screen {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1;
+  }
+  .setup-box {
+    width: 440px; background: #0d1a2a; border: 1px solid #1a3050;
+    border-radius: 12px; padding: 36px;
+  }
+  .setup-logo {
+    text-align: center; margin-bottom: 32px;
+  }
+  .setup-icon {
+    width: 48px; height: 48px; border-radius: 10px; margin: 0 auto 12px;
+    background: linear-gradient(135deg, #00d4ff, #0066ff);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+  }
+  .setup-title { font-size: 20px; font-weight: 700; color: #e0f0ff; letter-spacing: 2px; }
+  .setup-title span { color: #00d4ff; }
+  .setup-subtitle { font-size: 11px; color: #3a6a9c; margin-top: 4px; }
+  .label { font-size: 10px; color: #3a6a9c; margin-bottom: 8px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .mode-btns { display: flex; gap: 8px; margin-bottom: 8px; }
+  .mode-btn {
+    flex: 1; padding: 10px 0; border-radius: 6px; font-family: inherit;
+    font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 1px;
+    border: 1px solid #1a3050; background: transparent; color: #3a6a9c;
+    transition: all 0.2s;
+  }
+  .mode-btn.active-paper { background: #003366; border-color: #00d4ff; color: #fff; }
+  .mode-btn.active-live { background: #aa0000; border-color: #ff4444; color: #fff; }
+  .mode-info {
+    padding: 8px 12px; border-radius: 6px; font-size: 11px; margin-bottom: 16px;
+  }
+  .mode-info.paper { background: #001a33; border: 1px solid #00d4ff22; color: #8aaccc; }
+  .mode-info.live { background: #1a0000; border: 1px solid #ff444433; color: #ff8888; }
+  .token-input {
+    width: 100%; background: #080c10; border: 1px solid #1a3050;
+    border-radius: 6px; color: #c8d8e8; font-family: inherit;
+    font-size: 13px; padding: 10px 14px; outline: none; margin-bottom: 6px;
+  }
+  .token-input:focus { border-color: #00d4ff; }
+  .token-hint { font-size: 10px; color: #3a6a9c; margin-bottom: 20px; }
+  .token-hint a { color: #00d4ff; text-decoration: none; }
+  .connect-btn {
+    width: 100%; padding: 12px 0; border-radius: 6px;
+    background: linear-gradient(135deg, #0055cc, #00aaff);
+    border: none; color: #fff; font-size: 13px; font-family: inherit;
+    font-weight: 700; cursor: pointer; letter-spacing: 1px;
+  }
+  .connect-btn:disabled { background: #0d2040; cursor: default; }
+  .error-box {
+    padding: 8px 12px; background: #1a0000; border: 1px solid #ff444444;
+    border-radius: 6px; font-size: 12px; color: #ff8888; margin-bottom: 16px;
+  }
+
+  /* MAIN APP */
+  #main-app { display: none; flex-direction: column; height: 100vh; }
+  .topbar {
+    background: linear-gradient(90deg, #0a1628, #0d1f3c);
+    border-bottom: 1px solid #1a3a5c; padding: 0 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 52px; flex-shrink: 0;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .topbar-icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: linear-gradient(135deg, #00d4ff, #0066ff);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: bold; color: #fff;
+  }
+  .topbar-title { font-size: 15px; font-weight: 700; color: #e0f0ff; letter-spacing: 1px; }
+  .topbar-title span { color: #00d4ff; }
+  .mode-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 3px;
+  }
+  .mode-badge.paper { background: #001a10; border: 1px solid #00aa5544; color: #00cc66; }
+  .mode-badge.live { background: #1a0000; border: 1px solid #ff444444; color: #ff6666; }
+  .topbar-right { display: flex; align-items: center; gap: 16px; }
+  .stat-label { font-size: 11px; color: #8aaccc; }
+  .stat-label strong { color: #e0f0ff; }
+  .topbar-btn {
+    background: transparent; border: 1px solid #1a3050; color: #3a6a9c;
+    padding: 4px 10px; border-radius: 4px; font-size: 10px; font-family: inherit; cursor: pointer;
+  }
+  .auto-toggle { display: flex; align-items: center; gap: 8px; }
+  .auto-label { font-size: 10px; color: #3a6a9c; }
+  .toggle-track {
+    width: 36px; height: 18px; border-radius: 9px; background: #1a3a5c;
+    cursor: pointer; position: relative; transition: background 0.2s;
+  }
+  .toggle-track.on { background: #aa0000; }
+  .toggle-thumb {
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    transition: left 0.2s;
+  }
+  .toggle-track.on .toggle-thumb { left: 18px; }
+
+  /* TABS */
+  .tabs {
+    display: flex; border-bottom: 1px solid #1a3a5c;
+    background: #080c10; flex-shrink: 0;
+  }
+  .tab-btn {
+    background: none; border: none; color: #3a6a9c;
+    padding: 10px 20px; font-size: 11px; font-family: inherit; cursor: pointer;
+    border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 1.5px;
+    transition: color 0.15s;
+  }
+  .tab-btn.active { color: #00d4ff; border-bottom-color: #00d4ff; }
+
+  /* CHAT */
+  #chat-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .message { margin-bottom: 16px; display: flex; flex-direction: column; }
+  .message.user { align-items: flex-end; }
+  .message.assistant { align-items: flex-start; }
+  .msg-label { font-size: 10px; color: #3a6a9c; margin-bottom: 4px; letter-spacing: 1px; }
+  .msg-bubble {
+    max-width: 78%; padding: 10px 14px; font-size: 13px; line-height: 1.6;
+    color: #c8d8e8; white-space: pre-wrap;
+  }
+  .message.user .msg-bubble {
+    background: linear-gradient(135deg, #0d2a4c, #0a1f3a);
+    border: 1px solid #1a4a7c; border-radius: 12px 12px 2px 12px;
+  }
+  .message.assistant .msg-bubble {
+    background: #0d1a2a; border: 1px solid #1a3050;
+    border-radius: 12px 12px 12px 2px;
+  }
+  .trade-signal {
+    margin-top: 10px; padding: 8px 12px; background: #051020;
+    border: 1px solid #00d4ff33; border-radius: 6px; font-size: 11px;
+  }
+  .trade-signal-title { color: #00d4ff; margin-bottom: 4px; font-weight: 700; }
+  .trade-signal-detail { color: #8aaccc; }
+  .trade-signal-exp { color: #3a6a9c; font-size: 10px; margin-top: 2px; }
+  .loading-dots { display: flex; align-items: center; gap: 8px; color: #3a6a9c; font-size: 12px; padding: 8px 0; }
+  .dots-wrap { display: flex; gap: 4px; }
+
+  /* PENDING TRADE */
+  .pending-trade {
+    margin: 0 20px 12px; background: #051520;
+    border-radius: 8px; padding: 12px 16px;
+  }
+  .pending-trade.paper { border: 1px solid #00ff8844; }
+  .pending-trade.live { border: 1px solid #ff444444; }
+  .pending-title { font-size: 11px; font-weight: 700; margin-bottom: 6px; }
+  .pending-title.paper { color: #00ff88; }
+  .pending-title.live { color: #ff6666; }
+  .pending-detail { font-size: 12px; color: #c8d8e8; margin-bottom: 6px; }
+  .pending-reason { font-size: 11px; color: #3a6a9c; margin-bottom: 10px; }
+  .pending-btns { display: flex; gap: 8px; }
+  .confirm-btn {
+    border: none; color: #fff; padding: 6px 16px; border-radius: 4px;
+    font-size: 11px; font-family: inherit; cursor: pointer; font-weight: 700;
+  }
+  .confirm-btn.paper { background: #005522; }
+  .confirm-btn.live { background: #880000; }
+  .cancel-btn {
+    background: transparent; border: 1px solid #3a6a9c; color: #3a6a9c;
+    padding: 6px 16px; border-radius: 4px; font-size: 11px; font-family: inherit; cursor: pointer;
+  }
+
+  /* QUICK ACTIONS */
+  .quick-actions { padding: 0 20px 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .quick-btn {
+    background: #0d1a2a; border: 1px solid #1a3050; color: #8aaccc;
+    padding: 6px 12px; border-radius: 4px; font-size: 11px; font-family: inherit; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .quick-btn:hover { border-color: #00d4ff; color: #00d4ff; }
+
+  /* INPUT */
+  .input-area {
+    border-top: 1px solid #1a3a5c; padding: 12px 20px;
+    background: #080c10; display: flex; gap: 10px; align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1; background: #0d1a2a; border: 1px solid #1a3050;
+    border-radius: 6px; color: #c8d8e8; font-family: inherit;
+    font-size: 13px; padding: 10px 14px; resize: none; outline: none;
+    min-height: 44px; max-height: 120px;
+  }
+  .chat-input:focus { border-color: #00d4ff; }
+  .chat-input::placeholder { color: #3a6a9c; }
+  .send-btn {
+    background: #0d1a2a; border: none; border-radius: 6px; padding: 10px 16px;
+    color: #3a6a9c; font-size: 13px; font-family: inherit; cursor: default;
+    transition: all 0.2s;
+  }
+  .send-btn.active {
+    background: linear-gradient(135deg, #0066ff, #00d4ff);
+    color: #fff; cursor: pointer;
+  }
+
+  /* POSITIONS */
+  #positions-panel { display: none; padding: 20px; overflow-y: auto; flex: 1; }
+  .panel-title { font-size: 11px; color: #3a6a9c; margin-bottom: 16px; letter-spacing: 1.5px; }
+  .position-card {
+    background: #0d1a2a; border: 1px solid #1a3050; border-radius: 8px;
+    padding: 14px 16px; margin-bottom: 10px; display: flex; justify-content: space-between;
+  }
+  .pos-symbol { font-size: 13px; font-weight: 700; color: #e0f0ff; margin-bottom: 4px; }
+  .pos-detail { font-size: 11px; color: #8aaccc; }
+  .pos-mkt { font-size: 11px; color: #3a6a9c; margin-top: 2px; }
+  .pos-pnl { font-size: 16px; font-weight: 700; }
+  .pos-pnl-pct { font-size: 10px; }
+  .green { color: #00ff88; }
+  .red { color: #ff4466; }
+  .summary-card {
+    margin-top: 10px; background: #0d1a2a; border: 1px solid #1a3050;
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .summary-grid { display: flex; gap: 24px; flex-wrap: wrap; }
+  .summary-item .s-label { font-size: 10px; color: #3a6a9c; }
+  .summary-item .s-val { font-size: 16px; color: #e0f0ff; font-weight: 700; }
+
+  /* ORDERS */
+  #orders-panel { display: none; padding: 20px; overflow-y: auto; flex: 1; }
+  .order-step {
+    background: #0d1a2a; border: 1px solid #1a3050; border-radius: 8px;
+    padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 16px;
+  }
+  .step-num { font-size: 20px; color: #00d4ff22; font-weight: 700; flex-shrink: 0; }
+  .step-title { font-size: 13px; color: #e0f0ff; font-weight: 700; margin-bottom: 4px; }
+  .step-desc { font-size: 12px; color: #8aaccc; }
+  .mode-notice {
+    margin-top: 20px; padding: 14px 16px; border-radius: 8px; font-size: 12px;
+  }
+  .mode-notice.paper { background: #001a10; border: 1px solid #00aa5533; color: #88cc88; }
+  .mode-notice.live { background: #1a0000; border: 1px solid #ff444433; color: #ff8888; }
+</style>
+</head>
+<body>
+
+<!-- SETUP SCREEN -->
+<div id="setup-screen">
+  <div class="setup-box">
+    <div class="setup-logo">
+      <div class="setup-icon">⚡</div>
+      <div class="setup-title">OPTIONS<span>AI</span></div>
+      <div class="setup-subtitle">Tradier Brokerage Integration</div>
+    </div>
+    <div style="margin-bottom:20px">
+      <div class="label">Trading Mode</div>
+      <div class="mode-btns">
+        <button class="mode-btn active-paper" id="btn-paper" onclick="setMode('paper')">📄 PAPER</button>
+        <button class="mode-btn" id="btn-live" onclick="setMode('live')">⚡ LIVE</button>
+      </div>
+      <div class="mode-info paper" id="mode-info">📄 Paper mode uses Tradier's sandbox — no real money.</div>
+    </div>
+    <div style="margin-bottom:20px">
+      <div class="label" id="token-label">Tradier Paper API Token</div>
+      <input type="password" class="token-input" id="token-input" placeholder="Paste your Tradier API token..." />
+      <div class="token-hint">Get your token at <a href="https://developer.tradier.com" target="_blank">developer.tradier.com</a> → Applications → your app → Access Token</div>
+    </div>
+    <div class="error-box" id="error-box" style="display:none"></div>
+    <button class="connect-btn" id="connect-btn" onclick="handleConnect()">CONNECT TO TRADIER PAPER</button>
+    <div style="margin-top:24px;font-size:10px;color:#1a3050;text-align:center;line-height:1.6">
+      Your token is never stored — it lives only in this session's memory.
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="main-app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-icon">⚡</div>
+      <div class="topbar-title">OPTIONS<span>AI</span></div>
+      <div class="mode-badge paper" id="mode-badge">📄 PAPER</div>
+    </div>
+    <div class="topbar-right">
+      <div class="stat-label" id="cash-stat" style="display:none"></div>
+      <div class="stat-label" id="equity-stat" style="display:none"></div>
+      <button class="topbar-btn" onclick="loadAccountData()">↻ REFRESH</button>
+      <div class="auto-toggle">
+        <span class="auto-label">AUTO</span>
+        <div class="toggle-track" id="auto-toggle" onclick="toggleAuto()">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+      <button class="topbar-btn" onclick="disconnect()">DISCONNECT</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('chat')">Chat</button>
+    <button class="tab-btn" onclick="switchTab('positions')">Positions</button>
+    <button class="tab-btn" onclick="switchTab('orders')">Orders</button>
+  </div>
+
+  <!-- CHAT PANEL -->
+  <div id="chat-panel">
+    <div class="messages" id="messages"></div>
+    <div class="pending-trade paper" id="pending-trade" style="display:none">
+      <div class="pending-title paper" id="pending-title">📄 PAPER TRADE — CONFIRM?</div>
+      <div class="pending-detail" id="pending-detail"></div>
+      <div class="pending-reason" id="pending-reason"></div>
+      <div class="pending-btns">
+        <button class="confirm-btn paper" id="confirm-btn" onclick="executeTrade()">📄 PLACE PAPER ORDER</button>
+        <button class="cancel-btn" onclick="cancelTrade()">CANCEL</button>
+      </div>
+    </div>
+    <div class="quick-actions" id="quick-actions">
+      <button class="quick-btn" onclick="sendQuick('Analyze AAPL for a bullish call this week')">Analyze AAPL for a bullish call this week</button>
+      <button class="quick-btn" onclick="sendQuick('Find a cheap put hedge for market downturn')">Find a cheap put hedge for market downturn</button>
+      <button class="quick-btn" onclick="sendQuick('What is a safe covered call strategy?')">What is a safe covered call strategy?</button>
+      <button class="quick-btn" onclick="sendQuick('Review my current positions')">Review my current positions</button>
+    </div>
+    <div class="input-area">
+      <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask for analysis, say 'buy 1 AAPL call at $200 expiring Friday'..." onkeydown="handleKey(event)" oninput="updateSendBtn()"></textarea>
+      <button class="send-btn" id="send-btn" onclick="sendMessage()">▶</button>
+    </div>
+  </div>
+
+  <!-- POSITIONS PANEL -->
+  <div id="positions-panel">
+    <div class="panel-title" id="pos-title">LIVE POSITIONS</div>
+    <div id="positions-list"></div>
+    <div class="summary-card" id="summary-card" style="display:none">
+      <div class="label" style="margin-bottom:10px">Account Summary</div>
+      <div class="summary-grid" id="summary-grid"></div>
+    </div>
+  </div>
+
+  <!-- ORDERS PANEL -->
+  <div id="orders-panel">
+    <div class="panel-title">HOW TO PLACE ORDERS</div>
+    <div class="order-step"><div class="step-num">01</div><div><div class="step-title">Natural language</div><div class="step-desc">Type in chat: "Buy 2 TSLA calls at $250 strike expiring next Friday"</div></div></div>
+    <div class="order-step"><div class="step-num">02</div><div><div class="step-title">AI analyzes</div><div class="step-desc">Claude identifies the best option contract, checks your buying power, and builds the order</div></div></div>
+    <div class="order-step"><div class="step-num">03</div><div><div class="step-title">Review & confirm</div><div class="step-desc">You see the exact order details before anything is submitted</div></div></div>
+    <div class="order-step"><div class="step-num">04</div><div><div class="step-title">Submitted to Tradier</div><div class="step-desc">Order goes directly to Tradier's API — same as placing it in their platform</div></div></div>
+    <div class="mode-notice paper" id="orders-notice">📄 You are in PAPER mode. Orders are simulated in Tradier's sandbox — no real money.</div>
+  </div>
+</div>
+
+<script>
+const PROXY_URL    = 'https://optionsai-proxy-production.up.railway.app/tradier';
+const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const SYSTEM_PROMPT = `You are OptionsAI, an expert options trading assistant connected to a real brokerage (Tradier). You help users analyze and execute real options trades.
+You have access to live account data, real positions, and can place real orders.
+When a user confirms they want to place a trade, respond with a structured trade block:
+<TRADE>{"action":"BUY" or "SELL","type":"CALL" or "PUT","ticker":"SYMBOL","strike":000,"expiry":"YYYY-MM-DD","contracts":1,"orderType":"market" or "limit","limitPrice":0.00,"reason":"brief reason"}</TRADE>
+Always explain Greeks, IV, risk/reward. Be direct. Remind users that real money is at risk.
+Keep responses concise. Use proper options terminology.`;
+
+let session = null;
+let messages = [];
+let autoTrade = false;
+let pendingTrade = null;
+let balances = null;
+let positions = [];
+let currentMode = 'paper';
+let loading = false;
+
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn-paper').className = 'mode-btn' + (mode === 'paper' ? ' active-paper' : '');
+  document.getElementById('btn-live').className = 'mode-btn' + (mode === 'live' ? ' active-live' : '');
+  const info = document.getElementById('mode-info');
+  info.className = 'mode-info ' + mode;
+  info.textContent = mode === 'paper'
+    ? '📄 Paper mode uses Tradier\'s sandbox — no real money.'
+    : '⚠️ LIVE mode trades with real money. Losses are real.';
+  document.getElementById('token-label').textContent = `Tradier ${mode.toUpperCase()} API Token`;
+  document.getElementById('connect-btn').textContent = `CONNECT TO TRADIER ${mode.toUpperCase()}`;
+}
+
+async function handleConnect() {
+  const token = document.getElementById('token-input').value.trim();
+  if (!token) { showError('Please enter your Tradier API token.'); return; }
+  const btn = document.getElementById('connect-btn');
+  btn.disabled = true; btn.textContent = 'CONNECTING...';
+  hideError();
+  try {
+    const isLive = currentMode === 'live';
+    const res = await fetch(`${PROXY_URL}/user/profile`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+        'x-tradier-live': isLive ? 'true' : 'false',
+      }
+    });
+    if (!res.ok) throw new Error('Invalid token or connection failed.');
+    const data = await res.json();
+    const accountId = data.profile?.account?.account_number
+      || data.profile?.accounts?.account?.[0]?.account_number;
+    session = { token, accountId, isLive, name: data.profile?.name || 'Trader' };
+    startApp();
+  } catch(e) {
+    showError(e.message);
+    btn.disabled = false;
+    btn.textContent = `CONNECT TO TRADIER ${currentMode.toUpperCase()}`;
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-box');
+  el.textContent = msg; el.style.display = 'block';
+}
+function hideError() {
+  document.getElementById('error-box').style.display = 'none';
+}
+
+function startApp() {
+  document.getElementById('setup-screen').style.display = 'none';
+  const app = document.getElementById('main-app');
+  app.style.display = 'flex';
+  const badge = document.getElementById('mode-badge');
+  badge.textContent = session.isLive ? '🔴 LIVE · ' + session.accountId : '📄 PAPER · ' + session.accountId;
+  badge.className = 'mode-badge ' + (session.isLive ? 'live' : 'paper');
+  addMessage('assistant', `Connected to Tradier ${session.isLive ? 'LIVE' : 'paper'} account (${session.accountId}). Welcome, ${session.name}. I have access to your real positions and can place orders. What would you like to trade?`);
+  loadAccountData();
+}
+
+function disconnect() {
+  session = null; messages = []; balances = null; positions = [];
+  document.getElementById('setup-screen').style.display = 'flex';
+  document.getElementById('main-app').style.display = 'none';
+  document.getElementById('messages').innerHTML = '';
+}
+
+async function loadAccountData() {
+  if (!session) return;
+  try {
+    const [balRes, posRes] = await Promise.all([
+      fetch(`${PROXY_URL}/accounts/${session.accountId}/balances`, {
+        headers: { 'Authorization': `Bearer ${session.token}`, 'x-tradier-live': session.isLive ? 'true' : 'false' }
+      }),
+      fetch(`${PROXY_URL}/accounts/${session.accountId}/positions`, {
+        headers: { 'Authorization': `Bearer ${session.token}`, 'x-tradier-live': session.isLive ? 'true' : 'false' }
+      })
+    ]);
+    const balData = await balRes.json();
+    const posData = await posRes.json();
+    balances = balData?.balances;
+    const rawPos = posData?.positions?.position;
+    positions = rawPos ? (Array.isArray(rawPos) ? rawPos : [rawPos]) : [];
+    updateStats();
+    renderPositions();
+  } catch(e) { console.error('Failed to load account data:', e); }
+}
+
+function updateStats() {
+  if (!balances) return;
+  const cash = balances?.cash?.cash_available;
+  const equity = balances?.total_equity;
+  const cashEl = document.getElementById('cash-stat');
+  const eqEl = document.getElementById('equity-stat');
+  if (cash !== undefined) { cashEl.innerHTML = `Cash: <strong>$${cash.toFixed(0)}</strong>`; cashEl.style.display = 'block'; }
+  if (equity !== undefined) { eqEl.innerHTML = `Equity: <strong>$${equity.toFixed(0)}</strong>`; eqEl.style.display = 'block'; }
+}
+
+function renderPositions() {
+  const list = document.getElementById('positions-list');
+  document.getElementById('pos-title').textContent = `LIVE POSITIONS (${positions.length})`;
+  if (positions.length === 0) { list.innerHTML = '<div style="color:#3a6a9c;font-size:13px">No open positions found.</div>'; }
+  else {
+    list.innerHTML = positions.map(p => {
+      const isCall = p.symbol?.includes('C');
+      const pnl = (p.cost_basis && p.market_value) ? p.market_value - p.cost_basis : null;
+      const pnlPct = pnl !== null && p.cost_basis ? (pnl / p.cost_basis * 100).toFixed(1) : null;
+      return `<div class="position-card" style="border-left:3px solid ${isCall ? '#00d4ff' : '#ff6644'}">
+        <div>
+          <div class="pos-symbol">${p.symbol}</div>
+          <div class="pos-detail">Qty: ${p.quantity} · Cost: $${p.cost_basis?.toFixed(2)}</div>
+          <div class="pos-mkt">Mkt Value: $${p.market_value?.toFixed(2)}</div>
+        </div>
+        ${pnl !== null ? `<div style="text-align:right">
+          <div class="pos-pnl ${pnl >= 0 ? 'green' : 'red'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</div>
+          <div class="pos-pnl-pct ${pnl >= 0 ? 'green' : 'red'}">${pnlPct}%</div>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  }
+  if (balances) {
+    const sg = document.getElementById('summary-grid');
+    sg.innerHTML = [
+      ['Total Equity', `$${balances.total_equity?.toFixed(2)}`],
+      ['Cash', `$${balances.cash?.cash_available?.toFixed(2)}`],
+      ['Open P&L', `$${balances.open_pl?.toFixed(2) || '0.00'}`],
+    ].map(([l, v]) => `<div class="summary-item"><div class="s-label">${l}</div><div class="s-val">${v}</div></div>`).join('');
+    document.getElementById('summary-card').style.display = 'block';
+  }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.className = 'tab-btn' + (['chat','positions','orders'][i] === tab ? ' active' : '');
+  });
+  document.getElementById('chat-panel').style.display = tab === 'chat' ? 'flex' : 'none';
+  document.getElementById('positions-panel').style.display = tab === 'positions' ? 'block' : 'none';
+  document.getElementById('orders-panel').style.display = tab === 'orders' ? 'block' : 'none';
+  if (tab !== 'chat') loadAccountData();
+}
+
+function toggleAuto() {
+  autoTrade = !autoTrade;
+  const t = document.getElementById('auto-toggle');
+  t.className = 'toggle-track' + (autoTrade ? ' on' : '');
+}
+
+function addMessage(role, content, trade = null) {
+  messages.push({ role, content });
+  const container = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+  let tradeHTML = '';
+  if (trade) {
+    tradeHTML = `<div class="trade-signal">
+      <div class="trade-signal-title">📋 TRADE SIGNAL</div>
+      <div class="trade-signal-detail">${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type}${trade.limitPrice ? ` @ $${trade.limitPrice} limit` : ' (market)'}</div>
+      <div class="trade-signal-exp">Expires: ${trade.expiry}</div>
+    </div>`;
+  }
+  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'YOU' : 'OPTIONSAI'}</div>
+    <div class="msg-bubble">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}${tradeHTML}</div>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('quick-actions').style.display = messages.length > 2 ? 'none' : 'flex';
+}
+
+function parseTradeFromResponse(text) {
+  const match = text.match(/<TRADE>(.*?)<\/TRADE>/s);
+  if (match) { try { return JSON.parse(match[1]); } catch { return null; } }
+  return null;
+}
+function cleanResponse(text) {
+  return text.replace(/<TRADE>.*?<\/TRADE>/gs, '').trim();
+}
+function buildOptionSymbol(ticker, expiry, type, strike) {
+  const d = new Date(expiry);
+  const yy = String(d.getFullYear()).slice(2);
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const strikeStr = String(Math.round(strike*1000)).padStart(8,'0');
+  return `${ticker.padEnd(6)}${yy}${mm}${dd}${type[0]}${strikeStr}`;
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+function updateSendBtn() {
+  const val = document.getElementById('chat-input').value.trim();
+  const btn = document.getElementById('send-btn');
+  btn.className = 'send-btn' + (val && !loading ? ' active' : '');
+}
+function sendQuick(text) {
+  document.getElementById('chat-input').value = text;
+  sendMessage();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text || loading) return;
+  addMessage('user', text);
+  input.value = ''; updateSendBtn();
+  loading = true;
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'loading-dots';
+  loadingDiv.innerHTML = '<div class="dots-wrap"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div> Analyzing...';
+  loadingDiv.id = 'loading-indicator';
+  document.getElementById('messages').appendChild(loadingDiv);
+  document.getElementById('messages').scrollTop = 999999;
+
+  const accountContext = balances ? `\nAccount: ${session.accountId} (${session.isLive ? 'LIVE' : 'PAPER'})\nCash: $${balances?.cash?.cash_available?.toFixed(2)}\nPositions: ${positions.length}` : '';
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 1000,
+        system: SYSTEM_PROMPT + accountContext,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+      })
+    });
+    const data = await res.json();
+    const fullText = data.content?.map(b => b.text || '').join('') || 'Error getting response.';
+    const trade = parseTradeFromResponse(fullText);
+    const cleanText = cleanResponse(fullText);
+    document.getElementById('loading-indicator')?.remove();
+    addMessage('assistant', cleanText, trade);
+    if (trade) {
+      if (autoTrade) { await executeTrade(trade); }
+      else { showPendingTrade(trade); }
+    }
+  } catch(e) {
+    document.getElementById('loading-indicator')?.remove();
+    addMessage('assistant', 'Connection error: ' + e.message);
+  }
+  loading = false; updateSendBtn();
+}
+
+function showPendingTrade(trade) {
+  pendingTrade = trade;
+  const isLive = session?.isLive;
+  const el = document.getElementById('pending-trade');
+  el.className = 'pending-trade ' + (isLive ? 'live' : 'paper');
+  document.getElementById('pending-title').className = 'pending-title ' + (isLive ? 'live' : 'paper');
+  document.getElementById('pending-title').textContent = isLive ? '⚡ REAL MONEY TRADE — CONFIRM?' : '📄 PAPER TRADE — CONFIRM?';
+  document.getElementById('pending-detail').textContent = `${trade.action} ${trade.contracts}x ${trade.ticker} $${trade.strike} ${trade.type}${trade.limitPrice ? ` @ $${trade.limitPrice} limit` : ' (market)'} · exp ${trade.expiry}`;
+  document.getElementById('pending-reason').textContent = trade.reason ? `Reason: ${trade.reason}` : '';
+  const btn = document.getElementById('confirm-btn');
+  btn.className = 'confirm-btn ' + (isLive ? 'live' : 'paper');
+  btn.textContent = isLive ? '⚡ PLACE LIVE ORDER' : '📄 PLACE PAPER ORDER';
+  el.style.display = 'block';
+}
+
+function cancelTrade() {
+  pendingTrade = null;
+  document.getElementById('pending-trade').style.display = 'none';
+}
+
+async function executeTrade(trade) {
+  const t = trade || pendingTrade;
+  if (!t || !session) return;
+  cancelTrade();
+  try {
+    const optionSymbol = buildOptionSymbol(t.ticker, t.expiry, t.type, t.strike);
+    const orderBody = {
+      class: 'option', symbol: t.ticker, option_symbol: optionSymbol,
+      side: t.action.toLowerCase() === 'buy' ? 'buy_to_open' : 'sell_to_open',
+      quantity: String(t.contracts), type: t.orderType || 'market', duration: 'day',
+      ...(t.orderType === 'limit' && { price: String(t.limitPrice) }),
+    };
+    const res = await fetch(`${PROXY_URL}/accounts/${session.accountId}/orders`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.token}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-tradier-live': session.isLive ? 'true' : 'false',
+      },
+      body: new URLSearchParams(orderBody).toString(),
+    });
+    const data = await res.json();
+    const orderId = data?.order?.id;
+    addMessage('assistant', `✅ Order placed!\nOrder ID: ${orderId}\n${t.action} ${t.contracts}x ${t.ticker} $${t.strike} ${t.type} (${t.orderType || 'market'})\nExpires: ${t.expiry}`);
+    setTimeout(loadAccountData, 2000);
+  } catch(e) {
+    addMessage('assistant', `❌ Order failed: ${e.message}`);
+  }
+}
+</script>
+</body>
+</html>
