@@ -73,7 +73,7 @@ async function fetchQuote(ticker) {
 
       const lastBarVol = vols[vols.length-1] || 0;
       const avgBarVol  = vols.slice(0,-1).reduce((a,b)=>a+b,0) / Math.max(1, vols.length-1);
-      const barVolumeRatio = avgBarVol > 0 ? lastBarVol / avgBarVol : 1;
+      const barVolumeRatio = (avgBarVol > 0 && lastBarVol > 0) ? lastBarVol / avgBarVol : 0;
 
       const rsi   = calcRSI(closes, 14);
       const ma9   = calcMA(closes, 9);
@@ -86,7 +86,7 @@ async function fetchQuote(ticker) {
       const last3 = bars.slice(0,3).map(b=>({open:b.o?.toFixed(3),close:b.c?.toFixed(3),bullish:b.c>b.o,vol:b.v}));
       const lastH = bars[0]?.h || price;
       const lastL = bars[0]?.l || price;
-      const spreadEstPct = ((lastH - lastL) / price * 100).toFixed(3);
+      const spreadEstPct = (lastH && lastL && price && lastH > lastL) ? ((lastH - lastL) / price * 100).toFixed(3) : '0.20';
 
       const etNow = new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
       const etDate = new Date(etNow);
@@ -134,7 +134,7 @@ async function fetchQuote(ticker) {
     const changePct = ((price-prevClose)/prevClose*100);
     const volume    = meta.regularMarketVolume||0;
     const avgBarVol = vols.slice(0,-1).reduce((a,b)=>a+b,0)/Math.max(1,vols.length-1);
-    const barVolumeRatio = avgBarVol>0?(vols[vols.length-1]||0)/avgBarVol:1;
+    const barVolumeRatio = (avgBarVol>0&&vols[vols.length-1]>0)?(vols[vols.length-1]||0)/avgBarVol:0;
 
     const rsi = calcRSI(closes,14);
     const ma9 = calcMA(closes,9);
@@ -147,7 +147,7 @@ async function fetchQuote(ticker) {
     const last3=[];
     for(let i=Math.max(0,closes.length-3);i<closes.length;i++){last3.push({open:opens[i]?.toFixed(3),close:closes[i]?.toFixed(3),bullish:closes[i]>opens[i],vol:vols[i]});}
     const lastH=highs[highs.length-1]||price,lastL=lows[lows.length-1]||price;
-    const spreadEstPct=((lastH-lastL)/price*100).toFixed(3);
+    const spreadEstPct=(lastH&&lastL&&price&&lastH>lastL)?((lastH-lastL)/price*100).toFixed(3):'0.20';
 
     const etNow=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
     const etDate=new Date(etNow);
