@@ -224,6 +224,9 @@ async function scanTicker(ticker, settings) {
   const candleStr = d.last3Candles?.map(c=>`${c.bullish?'🟢':'🔴'} O:${c.open} C:${c.close}`).join(' | ')||'N/A';
   const dataStr = `${ticker} $${d.price} (${d.changePct}%) | RSI:${d.rsi} | VWAP:$${d.vwap} | MA9:$${d.ma9} | BarVol:${d.barVolumeRatio}x | Spread:${d.spreadEstPct}% | Bull:${d.consecutiveBull} Bear:${d.consecutiveBear} | Candles: ${candleStr} | Source:${d.source}`;
 
+  // Log what data we're sending to Claude
+  await addLog('entry', `📡 ${ticker}: $${d.price} (${d.changePct}%) RSI:${d.rsi} VWAP:${d.vwap} Bull:${d.consecutiveBull} Bear:${d.consecutiveBear} Spread:${d.spreadEstPct}% → asking Claude`);
+
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -233,8 +236,17 @@ async function scanTicker(ticker, settings) {
     const data = await res.json();
     const text = data.content?.map(b=>b.text||'').join('')||'';
     const match = text.match(/<SCAN_RESULT>(.*?)<\/SCAN_RESULT>/s);
-    if (match) { const r=JSON.parse(match[1]); return {...r,d}; }
-  } catch(e) { console.error('Claude scan error:',e.message); }
+    if (match) {
+      const r=JSON.parse(match[1]);
+      await addLog(r.confidence==='HIGH'||r.confidence==='MEDIUM'?'trade':'skip', `🤖 Claude ${ticker}: ${r.signal} (${r.confidence}) — ${r.reason}`);
+      return {...r,d};
+    } else {
+      await addLog('skip', `⚠️ ${ticker}: Claude returned no SCAN_RESULT block. Raw: ${text.slice(0,100)}`);
+    }
+  } catch(e) {
+    await addLog('stop', `❌ ${ticker}: Claude error — ${e.message}`);
+    console.error('Claude scan error:',e.message);
+  }
   return { ticker, signal:'NONE', confidence:'LOW', reason:'claude error', d };
 }
 
