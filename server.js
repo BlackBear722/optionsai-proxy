@@ -169,39 +169,61 @@ async function scanTicker(ticker, settings) {
 
 // TRADE EXECUTION
 function getNextFriday() {
-  // Get next Friday (day=5) at least 2 days from now in ET
+  // Use the third Friday of current/next month — monthly options always exist
+  // Also try next weekly Friday first (at least 2 days out)
   var now = new Date();
   var et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
-  var friday = new Date(et);
-  // Find next Friday
-  var daysToAdd = (5 - friday.getDay() + 7) % 7;
-  if (daysToAdd === 0) daysToAdd = 7; // if today is Friday, go to next Friday
-  if (daysToAdd < 2) daysToAdd += 7;  // need at least 2 days
-  friday.setDate(friday.getDate() + daysToAdd);
-  // Verify it's actually a Friday (day 5)
-  while (friday.getDay() !== 5) friday.setDate(friday.getDate() + 1);
-  var yy = String(friday.getFullYear()).slice(2);
-  var mm = ('0' + (friday.getMonth() + 1)).slice(-2);
-  var dd = ('0' + friday.getDate()).slice(-2);
-  var formatted = friday.getFullYear() + '-' + mm + '-' + dd;
-  console.log('Next Friday expiry: ' + formatted + ' (day=' + friday.getDay() + ')');
+
+  // Find next Friday at least 2 days out
+  var d = new Date(et);
+  d.setDate(d.getDate() + 2);
+  while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+
+  // Find third Friday of current month
+  var thirdFri = new Date(et.getFullYear(), et.getMonth(), 1);
+  var friCount = 0;
+  while (friCount < 3) {
+    if (thirdFri.getDay() === 5) friCount++;
+    if (friCount < 3) thirdFri.setDate(thirdFri.getDate() + 1);
+  }
+  // If third Friday is in the past or too soon, use next month's third Friday
+  var daysToThird = Math.round((thirdFri - et) / 86400000);
+  if (daysToThird < 2) {
+    thirdFri = new Date(et.getFullYear(), et.getMonth() + 1, 1);
+    friCount = 0;
+    while (friCount < 3) {
+      if (thirdFri.getDay() === 5) friCount++;
+      if (friCount < 3) thirdFri.setDate(thirdFri.getDate() + 1);
+    }
+  }
+
+  // Use the third Friday (monthly expiry) — most reliable in sandbox
+  var target = thirdFri;
+  var yy = String(target.getFullYear()).slice(2);
+  var mm = ('0' + (target.getMonth() + 1)).slice(-2);
+  var dd = ('0' + target.getDate()).slice(-2);
+  var formatted = target.getFullYear() + '-' + mm + '-' + dd;
+  console.log('Expiry (3rd Friday): ' + formatted + ' weekday=' + target.getDay());
   return { formatted, yy, mm, dd };
 }
 
 function buildSymbol(ticker, expiry, type, strike) {
   var fri = getNextFriday();
-  var ticker6 = (ticker + '      ').slice(0, 6);
-  // Round strike to nearest $1 for most stocks, $5 for SPY/QQQ
+  // Standard OCC option symbol: TICKER(padded to 6) + YYMMDD + C/P + strike*1000(8 digits)
+  var t = ticker.toUpperCase().trim();
+  // Pad with spaces to 6 chars
+  var ticker6 = (t + '      ').substring(0, 6);
+  // Round strike to nearest $5 for index ETFs, $1 for stocks
   var s = parseFloat(strike);
-  if (ticker === 'SPY' || ticker === 'QQQ') {
-    s = Math.round(s / 5) * 5; // nearest $5
+  if (t === 'SPY' || t === 'QQQ' || t === 'IWM' || t === 'GLD') {
+    s = Math.round(s / 5) * 5;
   } else {
-    s = Math.round(s); // nearest $1
+    s = Math.round(s);
   }
   var strikeInt = Math.round(s * 1000);
   var strikeStr = ('00000000' + strikeInt).slice(-8);
   var symbol = ticker6 + fri.yy + fri.mm + fri.dd + type[0].toUpperCase() + strikeStr;
-  console.log('Symbol: ' + symbol + ' strike: ' + s + ' expiry: ' + fri.formatted);
+  console.log('Symbol=[' + symbol + '] len=' + symbol.length + ' strike=' + s + ' expiry=' + fri.formatted);
   return symbol;
 }
 async function tradierReq(path, method, body, session) {
