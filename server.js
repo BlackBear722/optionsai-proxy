@@ -343,6 +343,29 @@ function startTimers(schedule) {
 
 // ── API ROUTES ─────────────────────────────────────────────────────────────────
 app.post('/api/session', async(req,res)=>{ await setState('session',req.body); await addLog('entry',`🔌 Session: ${req.body.accountId} (${req.body.isLive?'LIVE':'PAPER'})`); res.json({ok:true}); });
+
+// Server-side token verification — avoids CORS on mobile
+app.post('/api/connect', async(req,res)=>{
+  const { token, mode } = req.body;
+  if (!token) return res.status(400).json({ error: 'No token provided' });
+  const isLive = mode === 'live';
+  const base = isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+  try {
+    const r = await fetch(`${base}/user/profile`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+    });
+    if (!r.ok) return res.status(401).json({ error: 'Invalid token or connection failed.' });
+    const data = await r.json();
+    const accountId = data.profile?.account?.account_number || data.profile?.accounts?.account?.[0]?.account_number;
+    const name = data.profile?.name || 'Trader';
+    const session = { token, accountId, isLive, name };
+    await setState('session', session);
+    await addLog('entry', `🔌 Connected: ${accountId} (${isLive?'LIVE':'PAPER'})`);
+    res.json({ ok: true, accountId, name, isLive });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.post('/api/settings', async(req,res)=>{ await setState('settings',req.body.settings); await setState('watchlist',req.body.watchlist); startTimers(req.body.settings.schedule); await addLog('entry',`⚙️ Settings: target $${req.body.settings.profitTarget} stop $${req.body.settings.stopLoss}`); res.json({ok:true}); });
 app.post('/api/engine', async(req,res)=>{ const{on}=req.body; await setState('engineOn',on); if(on){const s=await getState('settings',{schedule:'5min'});startTimers(s.schedule);await addLog('entry','🟢 Engine started');runEngine();}else{clearInterval(engineTimer);clearInterval(monitorTimer);await addLog('entry','🔴 Engine stopped');}res.json({ok:true,engineOn:on}); });
 app.post('/api/killswitch', async(req,res)=>{ const{on}=req.body; await setState('killSwitch',on); if(on){clearInterval(engineTimer);clearInterval(monitorTimer);}await addLog(on?'stop':'entry',on?'🚨 KILL SWITCH ON':'✅ Kill switch off'); res.json({ok:true}); });
