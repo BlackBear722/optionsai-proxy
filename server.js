@@ -209,7 +209,10 @@ async function tradierReq(path, method, body, session) {
   var opts = { method:method, headers:{'Authorization':'Bearer '+session.token,'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'} };
   if (method !== 'GET') opts.body = new URLSearchParams(body).toString();
   var r = await fetch(base+path, opts);
-  return r.json();
+  var text = await r.text();
+  console.log('Tradier response (' + r.status + '):', text.slice(0,300));
+  try { return JSON.parse(text); }
+  catch(e) { return { error: text, status: r.status }; }
 }
 async function getPositions(session) {
   var data = await tradierReq('/accounts/'+session.accountId+'/positions','GET',null,session);
