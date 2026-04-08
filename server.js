@@ -185,13 +185,26 @@ function calcVWAP(q){try{const c=q?.close||[],v=q?.volume||[];let sp=0,sv=0;for(
 
 // ── CLAUDE SCAN ────────────────────────────────────────────────────────────────
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-const SCAN_PROMPT = `You are OptionsAI, a scalping bot. Apply Rotter-style strict rules using REAL-TIME data.
+const SCAN_PROMPT = `You are OptionsAI, a scalping bot. Use REAL-TIME data to find tradeable options setups.
 
-HIGH confidence CALL: consecutiveBull>=3, barVolumeRatio>=2.0, price>vwap, price>ma9, RSI 45-65, spreadEstPct<0.5, changePct>0.2
-HIGH confidence PUT:  consecutiveBear>=3, barVolumeRatio>=2.0, price<vwap, price<ma9, RSI 35-55, spreadEstPct<0.5, changePct<-0.2
-SKIP if: spreadEstPct>0.8, barVolumeRatio<1.5, RSI>75 or RSI<25, market closed
+HIGH confidence CALL (need at least 3 of these 5):
+- consecutiveBull >= 2
+- barVolumeRatio >= 1.3
+- price > vwap
+- RSI between 40-70
+- changePct > 0.1
 
-Strike: nearest ATM. Expiry: nearest Friday 2+ days out. Premium: 0.5-2% of stock price.
+HIGH confidence PUT (need at least 3 of these 5):
+- consecutiveBear >= 2
+- barVolumeRatio >= 1.3
+- price < vwap
+- RSI between 30-60
+- changePct < -0.1
+
+SKIP only if: market closed, RSI>80 or RSI<20, spreadEstPct>1.5
+
+Strike: nearest ATM to current price. Expiry: nearest Friday at least 2 days away.
+Premium: estimate 0.5-2% of stock price for ATM options.
 Respond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL" or "BUY_PUT" or "NONE","confidence":"HIGH" or "MEDIUM" or "LOW","strike":0,"expiry":"YYYY-MM-DD","premium":0.00,"reason":"key stats"}</SCAN_RESULT>`;
 
 async function scanTicker(ticker, settings) {
@@ -203,10 +216,10 @@ async function scanTicker(ticker, settings) {
   const bvr    = parseFloat(d.barVolumeRatio)||0;
   const spread = parseFloat(d.spreadEstPct)||99;
 
-  if (spread > 0.8)   { await addLog('skip',`⏭ ${ticker}: spread too wide (${spread}%)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`spread ${spread}%`, d }; }
-  if (bvr < 1.5)      { await addLog('skip',`⏭ ${ticker}: low volume (${bvr}x)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`vol ${bvr}x`, d }; }
-  if (d.consecutiveBull < 2 && d.consecutiveBear < 2) { await addLog('skip',`⏭ ${ticker}: no momentum`); return { ticker, signal:'NONE', confidence:'LOW', reason:'no momentum', d }; }
-  if (rsi > 75 || rsi < 25) { await addLog('skip',`⏭ ${ticker}: extreme RSI (${rsi})`); return { ticker, signal:'NONE', confidence:'LOW', reason:`RSI ${rsi}`, d }; }
+  if (spread > 1.5)   { await addLog('skip',`⏭ ${ticker}: spread too wide (${spread}%)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`spread ${spread}%`, d }; }
+  if (bvr < 1.0)      { await addLog('skip',`⏭ ${ticker}: low volume (${bvr}x)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`vol ${bvr}x`, d }; }
+  if (d.consecutiveBull < 1 && d.consecutiveBear < 1) { await addLog('skip',`⏭ ${ticker}: no momentum`); return { ticker, signal:'NONE', confidence:'LOW', reason:'no momentum', d }; }
+  if (rsi > 80 || rsi < 20) { await addLog('skip',`⏭ ${ticker}: extreme RSI (${rsi})`); return { ticker, signal:'NONE', confidence:'LOW', reason:`RSI ${rsi}`, d }; }
 
   const candleStr = d.last3Candles?.map(c=>`${c.bullish?'🟢':'🔴'} O:${c.open} C:${c.close}`).join(' | ')||'N/A';
   const dataStr = `${ticker} $${d.price} (${d.changePct}%) | RSI:${d.rsi} | VWAP:$${d.vwap} | MA9:$${d.ma9} | BarVol:${d.barVolumeRatio}x | Spread:${d.spreadEstPct}% | Bull:${d.consecutiveBull} Bear:${d.consecutiveBear} | Candles: ${candleStr} | Source:${d.source}`;
