@@ -169,8 +169,17 @@ async function scanTicker(ticker, settings) {
 
 // TRADE EXECUTION
 function buildSymbol(ticker, expiry, type, strike) {
-  var dt = new Date(expiry);
-  return (ticker+'      ').slice(0,6) + String(dt.getFullYear()).slice(2) + ('0'+(dt.getMonth()+1)).slice(-2) + ('0'+dt.getDate()).slice(-2) + type[0] + ('00000000'+Math.round(strike*1000)).slice(-8);
+  // OCC option symbol format: TICKER(6) + YY + MM + DD + C/P + STRIKE(8 digits, strike*1000 zero-padded)
+  var dt = new Date(expiry + 'T12:00:00Z'); // force noon UTC to avoid timezone date shift
+  var yy = String(dt.getUTCFullYear()).slice(2);
+  var mm = ('0' + (dt.getUTCMonth() + 1)).slice(-2);
+  var dd = ('0' + dt.getUTCDate()).slice(-2);
+  var ticker6 = (ticker + '      ').slice(0, 6);
+  var strikeInt = Math.round(parseFloat(strike) * 1000);
+  var strikeStr = ('00000000' + strikeInt).slice(-8);
+  var symbol = ticker6 + yy + mm + dd + type[0].toUpperCase() + strikeStr;
+  console.log('Option symbol: ' + symbol);
+  return symbol;
 }
 async function tradierReq(path, method, body, session) {
   var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
