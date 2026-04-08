@@ -168,11 +168,7 @@ async function scanTicker(ticker, settings) {
 }
 
 // TRADE EXECUTION
-function getNextFriday() {
-  // Use the third Friday of current/next month — monthly options always exist
-  // Also try next weekly Friday first (at least 2 days out)
-  var now = new Date();
-  var et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
+function getNextFriday() { var d = new Date('2026-04-17'); var yy='26',mm='04',dd='17'; return {formatted:'2026-04-17',yy,mm,dd}; }));
 
   // Find next Friday at least 2 days out
   var d = new Date(et);
