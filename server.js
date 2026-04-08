@@ -168,17 +168,29 @@ async function scanTicker(ticker, settings) {
 }
 
 // TRADE EXECUTION
+function getNextFriday() {
+  // Get next Friday at least 2 days from now in ET
+  var now = new Date();
+  var et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
+  var day = et.getDay(); // 0=Sun, 5=Fri
+  var daysUntilFriday = (5 - day + 7) % 7;
+  if (daysUntilFriday < 2) daysUntilFriday += 7; // need at least 2 days out
+  var friday = new Date(et);
+  friday.setDate(et.getDate() + daysUntilFriday);
+  var yy = String(friday.getFullYear()).slice(2);
+  var mm = ('0' + (friday.getMonth() + 1)).slice(-2);
+  var dd = ('0' + friday.getDate()).slice(-2);
+  return { formatted: friday.getFullYear() + '-' + mm + '-' + dd, yy, mm, dd };
+}
+
 function buildSymbol(ticker, expiry, type, strike) {
-  // OCC option symbol format: TICKER(6) + YY + MM + DD + C/P + STRIKE(8 digits, strike*1000 zero-padded)
-  var dt = new Date(expiry + 'T12:00:00Z'); // force noon UTC to avoid timezone date shift
-  var yy = String(dt.getUTCFullYear()).slice(2);
-  var mm = ('0' + (dt.getUTCMonth() + 1)).slice(-2);
-  var dd = ('0' + dt.getUTCDate()).slice(-2);
+  // Always use next valid Friday — ignore Claude's expiry since it's often wrong
+  var fri = getNextFriday();
   var ticker6 = (ticker + '      ').slice(0, 6);
   var strikeInt = Math.round(parseFloat(strike) * 1000);
   var strikeStr = ('00000000' + strikeInt).slice(-8);
-  var symbol = ticker6 + yy + mm + dd + type[0].toUpperCase() + strikeStr;
-  console.log('Option symbol: ' + symbol);
+  var symbol = ticker6 + fri.yy + fri.mm + fri.dd + type[0].toUpperCase() + strikeStr;
+  console.log('Option symbol: ' + symbol + ' expiry: ' + fri.formatted);
   return symbol;
 }
 async function tradierReq(path, method, body, session) {
@@ -198,7 +210,8 @@ async function placeTrade(trade, session) {
   var sym = buildSymbol(trade.ticker, trade.expiry, trade.type, trade.strike);
   var orderBody = {class:'option',symbol:trade.ticker,option_symbol:sym,side:'buy_to_open',quantity:String(trade.contracts),type:'limit',duration:'day',price:String(trade.limitPrice)};
   console.log('ORDER BODY:', JSON.stringify(orderBody));
-  await addLog('entry', 'placing order: sym='+sym+' strike='+trade.strike+' expiry='+trade.expiry+' price='+trade.limitPrice);
+  var fri = getNextFriday();
+  await addLog('entry', 'placing order: sym='+sym+' strike='+trade.strike+' expiry='+fri.formatted+' price='+trade.limitPrice);
   var result = await tradierReq('/accounts/'+session.accountId+'/orders','POST',orderBody,session);
   console.log('ORDER RESULT:', JSON.stringify(result));
   await addLog('entry', 'order result: '+JSON.stringify(result));
