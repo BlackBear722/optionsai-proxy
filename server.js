@@ -169,28 +169,39 @@ async function scanTicker(ticker, settings) {
 
 // TRADE EXECUTION
 function getNextFriday() {
-  // Get next Friday at least 2 days from now in ET
+  // Get next Friday (day=5) at least 2 days from now in ET
   var now = new Date();
   var et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
-  var day = et.getDay(); // 0=Sun, 5=Fri
-  var daysUntilFriday = (5 - day + 7) % 7;
-  if (daysUntilFriday < 2) daysUntilFriday += 7; // need at least 2 days out
   var friday = new Date(et);
-  friday.setDate(et.getDate() + daysUntilFriday);
+  // Find next Friday
+  var daysToAdd = (5 - friday.getDay() + 7) % 7;
+  if (daysToAdd === 0) daysToAdd = 7; // if today is Friday, go to next Friday
+  if (daysToAdd < 2) daysToAdd += 7;  // need at least 2 days
+  friday.setDate(friday.getDate() + daysToAdd);
+  // Verify it's actually a Friday (day 5)
+  while (friday.getDay() !== 5) friday.setDate(friday.getDate() + 1);
   var yy = String(friday.getFullYear()).slice(2);
   var mm = ('0' + (friday.getMonth() + 1)).slice(-2);
   var dd = ('0' + friday.getDate()).slice(-2);
-  return { formatted: friday.getFullYear() + '-' + mm + '-' + dd, yy, mm, dd };
+  var formatted = friday.getFullYear() + '-' + mm + '-' + dd;
+  console.log('Next Friday expiry: ' + formatted + ' (day=' + friday.getDay() + ')');
+  return { formatted, yy, mm, dd };
 }
 
 function buildSymbol(ticker, expiry, type, strike) {
-  // Always use next valid Friday — ignore Claude's expiry since it's often wrong
   var fri = getNextFriday();
   var ticker6 = (ticker + '      ').slice(0, 6);
-  var strikeInt = Math.round(parseFloat(strike) * 1000);
+  // Round strike to nearest $1 for most stocks, $5 for SPY/QQQ
+  var s = parseFloat(strike);
+  if (ticker === 'SPY' || ticker === 'QQQ') {
+    s = Math.round(s / 5) * 5; // nearest $5
+  } else {
+    s = Math.round(s); // nearest $1
+  }
+  var strikeInt = Math.round(s * 1000);
   var strikeStr = ('00000000' + strikeInt).slice(-8);
   var symbol = ticker6 + fri.yy + fri.mm + fri.dd + type[0].toUpperCase() + strikeStr;
-  console.log('Option symbol: ' + symbol + ' expiry: ' + fri.formatted);
+  console.log('Symbol: ' + symbol + ' strike: ' + s + ' expiry: ' + fri.formatted);
   return symbol;
 }
 async function tradierReq(path, method, body, session) {
@@ -250,7 +261,9 @@ async function runEngine() {
   if (signals.length > 0) {
     var best = signals.sort(function(a,b){return (parseFloat(b.premium)||0)-(parseFloat(a.premium)||0);})[0];
     await addLog('trade','BEST: '+best.ticker+' '+best.signal+' @ $'+best.premium);
-    var trade = {action:'BUY',type:best.signal.indexOf('CALL')>=0?'CALL':'PUT',ticker:best.ticker,strike:best.strike,expiry:best.expiry,contracts:settings.contracts,limitPrice:best.premium};
+    // Use current price as strike (ATM) — more reliable than Claude's guess
+    var currentPrice = best.d && best.d.price ? parseFloat(best.d.price) : parseFloat(best.strike);
+    var trade = {action:'BUY',type:best.signal.indexOf('CALL')>=0?'CALL':'PUT',ticker:best.ticker,strike:currentPrice,expiry:best.expiry,contracts:settings.contracts,limitPrice:best.premium};
     try {
       var result = await placeTrade(trade, session);
       var orderId = result && result.order && result.order.id;
