@@ -129,7 +129,7 @@ app.get('/quote/:ticker', async (req, res) => {
 
 // CLAUDE SCAN
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-const SCAN_SYSTEM = 'You are an options trading bot. Given real-time stock data, decide if there is a tradeable options setup. Rules: BUY_CALL if price is up today and RSI under 70. BUY_PUT if price is down today and RSI above 30. NONE if market closed or no clear direction. Be willing to trade on any reasonable signal. Strike = nearest round number to current price. Expiry = nearest Friday at least 2 days away. Premium = 1-3% of stock price. IMPORTANT: confidence must be exactly one of: HIGH, MEDIUM, or LOW. Never use MODERATE or any other value. Respond ONLY with this exact format: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"expiry":"2026-04-11","premium":2.50,"reason":"brief"}</SCAN_RESULT>';
+const SCAN_SYSTEM = 'You are an options scalping bot. Given real-time stock data, find a tradeable options setup. Rules: BUY_CALL if price is up or flat with RSI under 70. BUY_PUT if price is down or flat with RSI above 30. Only return NONE if market is closed. Always pick a direction based on the data. Strike = 1-2% OUT of the money (OTM) from current price for cheaper premium. Expiry = nearest Friday at least 2 days away. Premium = keep it cheap, under $2.00 for SPY/QQQ, under $1.00 for others. IMPORTANT: confidence must be exactly HIGH, MEDIUM, or LOW only. Respond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"MEDIUM","strike":500,"expiry":"2026-04-11","premium":1.50,"reason":"brief"}</SCAN_RESULT>';
 
 async function scanTicker(ticker, settings) {
   const d = await fetchQuote(ticker);
@@ -218,7 +218,7 @@ async function runEngine() {
     // Small delay between tickers to avoid Alpha Vantage rate limit (5 calls/min)
     if (ti < watchlist.length-1) await new Promise(function(r){setTimeout(r,13000);});
   }
-  var signals = results.filter(function(r){return r.signal!=='NONE'&&r.signal!==undefined&&r.confidence!=='LOW';});
+  var signals = results.filter(function(r){return r.signal==='BUY_CALL'||r.signal==='BUY_PUT';});
   if (signals.length > 0) {
     var best = signals.sort(function(a,b){return (parseFloat(b.premium)||0)-(parseFloat(a.premium)||0);})[0];
     await addLog('trade','BEST: '+best.ticker+' '+best.signal+' @ $'+best.premium);
