@@ -418,14 +418,16 @@ async function handleConnect(){
   btn.disabled=true;btn.textContent='CONNECTING...';hideError();
   try{
     const isLive=currentMode==='live';
-    const res=await fetch(`${PROXY_URL}/user/profile`,{headers:{'Authorization':`Bearer ${token}`,'Accept':'application/json','x-tradier-live':isLive?'true':'false'}});
-    if(!res.ok)throw new Error('Invalid token or connection failed.');
+    // Route through server to avoid CORS on mobile
+    const res=await fetch('/api/connect',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token,mode:currentMode})
+    });
     const data=await res.json();
-    const accountId=data.profile?.account?.account_number||data.profile?.accounts?.account?.[0]?.account_number;
-    session={token,accountId,isLive,name:data.profile?.name||'Trader'};
+    if(!res.ok||data.error)throw new Error(data.error||'Connection failed.');
+    session={token,accountId:data.accountId,isLive:data.isLive,name:data.name};
     saveTokenIfRemember(token,currentMode);
-    // Save session to server so engine can trade without browser
-    await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,accountId,isLive,name:session.name})}).catch(()=>{});
     startApp();
   }catch(e){
     showError(e.message);btn.disabled=false;
