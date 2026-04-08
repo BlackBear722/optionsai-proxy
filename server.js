@@ -196,7 +196,13 @@ async function getPositions(session) {
 }
 async function placeTrade(trade, session) {
   var sym = buildSymbol(trade.ticker, trade.expiry, trade.type, trade.strike);
-  return tradierReq('/accounts/'+session.accountId+'/orders','POST',{class:'option',symbol:trade.ticker,option_symbol:sym,side:'buy_to_open',quantity:String(trade.contracts),type:'limit',duration:'day',price:String(trade.limitPrice)},session);
+  var orderBody = {class:'option',symbol:trade.ticker,option_symbol:sym,side:'buy_to_open',quantity:String(trade.contracts),type:'limit',duration:'day',price:String(trade.limitPrice)};
+  console.log('ORDER BODY:', JSON.stringify(orderBody));
+  await addLog('entry', 'placing order: sym='+sym+' strike='+trade.strike+' expiry='+trade.expiry+' price='+trade.limitPrice);
+  var result = await tradierReq('/accounts/'+session.accountId+'/orders','POST',orderBody,session);
+  console.log('ORDER RESULT:', JSON.stringify(result));
+  await addLog('entry', 'order result: '+JSON.stringify(result));
+  return result;
 }
 async function closePos(pos, session) {
   return tradierReq('/accounts/'+session.accountId+'/orders','POST',{class:'option',symbol:(pos.symbol||'').slice(0,6).trim(),option_symbol:pos.symbol,side:'sell_to_close',quantity:String(Math.abs(pos.quantity||1)),type:'market',duration:'day'},session);
