@@ -168,7 +168,11 @@ async function scanTicker(ticker, settings) {
 }
 
 // TRADE EXECUTION
-function getNextFriday() { var d = new Date('2026-04-17'); var yy='26',mm='04',dd='17'; return {formatted:'2026-04-17',yy,mm,dd}; }));
+function getNextFriday() {
+  var yy = '26', mm = '04', dd = '17';
+  var formatted = '2026-04-17';
+  return { formatted: formatted, yy: yy, mm: mm, dd: dd };
+}; }));
 
   // Find next Friday at least 2 days out
   var d = new Date(et);
