@@ -217,8 +217,8 @@ async function scanTicker(ticker, settings) {
   const spread = parseFloat(d.spreadEstPct)||99;
 
   if (spread > 1.5)   { await addLog('skip',`⏭ ${ticker}: spread too wide (${spread}%)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`spread ${spread}%`, d }; }
-  if (bvr < 1.0)      { await addLog('skip',`⏭ ${ticker}: low volume (${bvr}x)`); return { ticker, signal:'NONE', confidence:'LOW', reason:`vol ${bvr}x`, d }; }
-  if (d.consecutiveBull < 1 && d.consecutiveBear < 1) { await addLog('skip',`⏭ ${ticker}: no momentum`); return { ticker, signal:'NONE', confidence:'LOW', reason:'no momentum', d }; }
+  // Volume pre-filter removed — let Claude decide based on full data
+  // Momentum pre-filter removed — let Claude decide
   if (rsi > 80 || rsi < 20) { await addLog('skip',`⏭ ${ticker}: extreme RSI (${rsi})`); return { ticker, signal:'NONE', confidence:'LOW', reason:`RSI ${rsi}`, d }; }
 
   const candleStr = d.last3Candles?.map(c=>`${c.bullish?'🟢':'🔴'} O:${c.open} C:${c.close}`).join(' | ')||'N/A';
@@ -290,7 +290,7 @@ async function runEngine() {
     if(r.signal!=='NONE'&&r.confidence==='HIGH') await addLog('trade',`✅ ${r.ticker}: ${r.signal} @ $${r.premium} — ${r.reason}`);
   }
 
-  const signals=results.filter(r=>r.signal!=='NONE'&&r.confidence==='HIGH');
+  const signals=results.filter(r=>r.signal!=='NONE'&&(r.confidence==='HIGH'||r.confidence==='MEDIUM'));
   if(signals.length>0){
     const best=signals.sort((a,b)=>(b.premium||0)-(a.premium||0))[0];
     await addLog('trade',`🏆 Best signal: ${best.ticker} ${best.signal} — placing order`);
