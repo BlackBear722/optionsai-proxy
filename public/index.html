@@ -388,7 +388,25 @@ function saveTokenIfRemember(token,mode){
     }
   }catch(e){}
 }
-window.addEventListener('load',loadSavedToken);
+window.addEventListener('load', async () => {
+  loadSavedToken();
+  // Check if server already has a session — auto-connect if so
+  try {
+    const res = await fetch('/api/state');
+    const state = await res.json();
+    if (state.hasSession && state.accountId) {
+      // Server already has session — skip login
+      session = {
+        token: document.getElementById('token-input').value || 'server-stored',
+        accountId: state.accountId,
+        isLive: state.isLive || false,
+        name: 'Trader'
+      };
+      currentMode = state.isLive ? 'live' : 'paper';
+      startApp();
+    }
+  } catch(e) { console.log('No server session, showing login'); }
+});
 
 // State
 let session=null,messages=[],pendingTrade=null,balances=null,positions=[],currentMode='paper',loading=false;
