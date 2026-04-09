@@ -187,6 +187,7 @@
     <button class="tab-btn active" onclick="switchTab('chat')">Chat</button>
     <button class="tab-btn" onclick="switchTab('autoinvest')">Auto-Invest</button>
     <button class="tab-btn" onclick="switchTab('positions')">Positions</button>
+    <button class="tab-btn" onclick="switchTab('journal')">Journal</button>
     <button class="tab-btn" onclick="switchTab('orders')">How It Works</button>
   </div>
 
@@ -312,6 +313,22 @@
       <div class="label" style="margin-bottom:10px">Account Summary</div>
       <div class="summary-grid" id="summary-grid"></div>
     </div>
+  </div>
+
+  <!-- JOURNAL PANEL -->
+  <div id="journal-panel" style="display:none;padding:16px;overflow-y:auto;flex:1;flex-direction:column">
+    <div style="font-size:11px;color:#3a6a9c;margin-bottom:14px;letter-spacing:1.5px">TRADE JOURNAL</div>
+
+    <!-- Stats grid -->
+    <div id="journal-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"></div>
+
+    <!-- Daily breakdown -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;letter-spacing:1.5px">DAILY BREAKDOWN</div>
+    <div id="journal-daily" style="margin-bottom:14px"></div>
+
+    <!-- Recent trades -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;letter-spacing:1.5px">RECENT TRADES</div>
+    <div id="journal-trades"></div>
   </div>
 
   <!-- HOW IT WORKS -->
@@ -874,6 +891,61 @@ function startLogPoller(){
   },5000); // poll every 5 seconds
 }
 
+async function loadJournal(){
+  try{
+    const res=await fetch('/api/journal');
+    const j=await res.json();
+    if(j.error){document.getElementById('journal-stats').innerHTML='<div style="color:#3a6a9c;font-size:12px;grid-column:1/-1">No trades recorded yet.</div>';return;}
+
+    // Stats grid
+    const stats=[
+      {label:'Total Trades',val:j.totalTrades,color:'#e0f0ff'},
+      {label:'Win Rate',val:j.winRate+'%',color:parseFloat(j.winRate)>=50?'#00ff88':'#ff4466'},
+      {label:'Total P&L',val:(parseFloat(j.totalPnl)>=0?'+':'')+'$'+j.totalPnl,color:parseFloat(j.totalPnl)>=0?'#00ff88':'#ff4466'},
+      {label:'Profit Factor',val:j.profitFactor,color:parseFloat(j.profitFactor)>=1?'#00ff88':'#ff4466'},
+      {label:'Avg Win',val:'+$'+j.avgWin,color:'#00ff88'},
+      {label:'Avg Loss',val:'$'+j.avgLoss,color:'#ff4466'},
+      {label:'Wins',val:j.wins,color:'#00ff88'},
+      {label:'Losses',val:j.losses,color:'#ff4466'},
+    ];
+    document.getElementById('journal-stats').innerHTML=stats.map(s=>`
+      <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:#3a6a9c;margin-bottom:4px">${s.label}</div>
+        <div style="font-size:18px;font-weight:700;color:${s.color}">${s.val}</div>
+      </div>`).join('');
+
+    // Daily breakdown
+    if(j.dailyStats&&j.dailyStats.length){
+      document.getElementById('journal-daily').innerHTML=j.dailyStats.map(d=>`
+        <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:6px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:12px;color:#e0f0ff;font-weight:700">${d.date}</div>
+            <div style="font-size:11px;color:#3a6a9c">${d.trades} trades · ${d.wins}W ${d.losses}L</div>
+          </div>
+          <div style="font-size:16px;font-weight:700;color:${d.pnl>=0?'#00ff88':'#ff4466'}">${d.pnl>=0?'+':''}$${parseFloat(d.pnl).toFixed(2)}</div>
+        </div>`).join('');
+    } else {
+      document.getElementById('journal-daily').innerHTML='<div style="color:#3a6a9c;font-size:12px">No closed trades yet.</div>';
+    }
+
+    // Recent trades
+    if(j.recentTrades&&j.recentTrades.length){
+      document.getElementById('journal-trades').innerHTML=j.recentTrades.map(t=>`
+        <div style="background:#0d1a2a;border:1px solid ${t.result==='win'?'#00ff8833':t.result==='loss'?'#ff446633':'#1a3050'};border-radius:6px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:12px;color:#e0f0ff">${t.ticker} ${t.type||''} <span style="color:#3a6a9c;font-size:10px">${t.strike?'$'+t.strike:''}</span></div>
+            <div style="font-size:10px;color:#3a6a9c">${new Date(t.ts).toLocaleString()}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:13px;font-weight:700;color:${t.result==='win'?'#00ff88':t.result==='loss'?'#ff4466':'#3a6a9c'}">${t.result==='win'?'+':t.result==='loss'?'':''}${t.pnl?'$'+parseFloat(t.pnl).toFixed(2):t.result||'open'}</div>
+          </div>
+        </div>`).join('');
+    } else {
+      document.getElementById('journal-trades').innerHTML='<div style="color:#3a6a9c;font-size:12px">No trades yet.</div>';
+    }
+  }catch(e){console.error('journal error:',e);}
+}
+
 function renderWatchlist(){
   document.getElementById('watchlist-grid').innerHTML=watchlist.map(t=>`<div class="watchlist-tag active">${t} <span onclick="removeTicker('${t}')" style="color:#3a6a9c;cursor:pointer;font-size:10px">✕</span></div>`).join('');
 }
@@ -907,13 +979,15 @@ function addLog(text,type='entry'){
 
 // ── TABS ───────────────────────────────────────────────────────────────────────
 function switchTab(tab){
-  const tabs=['chat','autoinvest','positions','orders'];
+  const tabs=['chat','autoinvest','positions','journal','orders'];
   document.querySelectorAll('.tab-btn').forEach((b,i)=>{b.className='tab-btn'+(tabs[i]===tab?' active':'');});
   document.getElementById('chat-panel').style.display=tab==='chat'?'flex':'none';
   document.getElementById('autoinvest-panel').style.display=tab==='autoinvest'?'block':'none';
   document.getElementById('positions-panel').style.display=tab==='positions'?'block':'none';
+  document.getElementById('journal-panel').style.display=tab==='journal'?'flex':'none';
   document.getElementById('orders-panel').style.display=tab==='orders'?'block':'none';
   if(tab==='positions')loadAccountData();
+  if(tab==='journal')loadJournal();
 }
 
 // ── CHAT ───────────────────────────────────────────────────────────────────────
