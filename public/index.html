@@ -317,8 +317,17 @@
 
   <!-- JOURNAL PANEL -->
   <div id="journal-panel" style="display:none;padding:16px;overflow-y:auto;flex:1;flex-direction:column">
-    <div style="font-size:11px;color:#3a6a9c;margin-bottom:14px;letter-spacing:1.5px">TRADE JOURNAL</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="font-size:11px;color:#3a6a9c;letter-spacing:1.5px">TRADE JOURNAL</div>
+      <div style="font-size:10px;color:#3a6a9c" id="journal-updated"></div>
+    </div>
 
+    <!-- Today's live stats -->
+    <div style="font-size:10px;color:#00d4ff;margin-bottom:8px;letter-spacing:1.5px">TODAY LIVE</div>
+    <div id="journal-today" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px"></div>
+
+    <!-- All time stats -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;letter-spacing:1.5px">ALL TIME</div>
     <!-- Stats grid -->
     <div id="journal-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"></div>
 
@@ -891,11 +900,60 @@ function startLogPoller(){
   },5000); // poll every 5 seconds
 }
 
+let journalRefreshTimer = null;
+
 async function loadJournal(){
   try{
-    const res=await fetch('/api/journal');
-    const j=await res.json();
-    if(j.error){document.getElementById('journal-stats').innerHTML='<div style="color:#3a6a9c;font-size:12px;grid-column:1/-1">No trades recorded yet.</div>';return;}
+    const [jRes, logsRes] = await Promise.all([
+      fetch('/api/journal'),
+      fetch('/api/logs')
+    ]);
+    const j=await jRes.json();
+    const logs=await logsRes.json();
+
+    // Calculate today's stats from logs
+    const today=new Date().toISOString().slice(0,10);
+    const todayLogs=logs.filter(l=>l.ts&&l.ts.slice(0,10)===today);
+    const todayWins=todayLogs.filter(l=>l.message&&l.message.includes('PROFIT TARGET')).length;
+    const todayLosses=todayLogs.filter(l=>l.message&&l.message.includes('STOP LOSS')).length;
+    const todayTrades=todayWins+todayLosses;
+    // Extract P&L from log messages
+    let todayProfit=0, todayLoss=0;
+    todayLogs.forEach(l=>{
+      if(l.message&&l.message.includes('PROFIT TARGET')){
+        const m=l.message.match(/\+\$(\d+\.\d+)/);
+        if(m)todayProfit+=parseFloat(m[1]);
+      }
+      if(l.message&&l.message.includes('STOP LOSS')){
+        const m=l.message.match(/-\$(\d+\.\d+)/);
+        if(m)todayLoss+=parseFloat(m[1]);
+      }
+    });
+    const todayNet=todayProfit-todayLoss;
+    const todayWinRate=todayTrades>0?Math.round(todayWins/todayTrades*100):0;
+
+    // Open positions P&L from dashboard
+    const openPL=balances?.open_pl||0;
+
+    // Today's live stats
+    const todayStats=[
+      {label:"TODAY'S PROFIT",val:'+$'+todayProfit.toFixed(2),color:'#00ff88'},
+      {label:"TODAY'S LOSS",val:'-$'+todayLoss.toFixed(2),color:'#ff4466'},
+      {label:'TRADES TODAY',val:todayTrades,color:'#e0f0ff'},
+      {label:'WIN RATE TODAY',val:todayTrades>0?todayWinRate+'%':'—',color:todayWinRate>=50?'#00ff88':'#ff4466'},
+      {label:"TODAY'S NET",val:(todayNet>=0?'+':'')+('$'+Math.abs(todayNet).toFixed(2)),color:todayNet>=0?'#00ff88':'#ff4466'},
+      {label:'OPEN P&L',val:(parseFloat(openPL)>=0?'+':'')+('$'+parseFloat(openPL||0).toFixed(2)),color:parseFloat(openPL)>=0?'#00ff88':'#ff4466'},
+    ];
+    document.getElementById('journal-today').innerHTML=todayStats.map(s=>`
+      <div style="background:#051520;border:1px solid #00d4ff22;border-radius:8px;padding:10px 12px">
+        <div style="font-size:9px;color:#3a6a9c;margin-bottom:3px">${s.label}</div>
+        <div style="font-size:16px;font-weight:700;color:${s.color}">${s.val}</div>
+      </div>`).join('');
+
+    // Update timestamp
+    document.getElementById('journal-updated').textContent='Updated '+new Date().toLocaleTimeString();
+
+    if(j.error){document.getElementById('journal-stats').innerHTML='<div style="color:#3a6a9c;font-size:12px;grid-column:1/-1">No closed trades recorded yet.</div>';return;}
 
     // Stats grid
     const stats=[
@@ -987,7 +1045,13 @@ function switchTab(tab){
   document.getElementById('journal-panel').style.display=tab==='journal'?'flex':'none';
   document.getElementById('orders-panel').style.display=tab==='orders'?'block':'none';
   if(tab==='positions')loadAccountData();
-  if(tab==='journal')loadJournal();
+  if(tab==='journal'){
+    loadJournal();
+    if(journalRefreshTimer)clearInterval(journalRefreshTimer);
+    journalRefreshTimer=setInterval(loadJournal,30000);
+  } else {
+    if(journalRefreshTimer){clearInterval(journalRefreshTimer);journalRefreshTimer=null;}
+  }
 }
 
 // ── CHAT ───────────────────────────────────────────────────────────────────────
