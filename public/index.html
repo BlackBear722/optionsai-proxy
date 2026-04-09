@@ -501,6 +501,8 @@ function startApp(){
   loadAccountData();
   loadServerState();
   startLogPoller();
+  setInterval(refreshLiveStats, 30000);
+  refreshLiveStats();
 }
 
 function disconnect(){
@@ -864,6 +866,66 @@ async function loadServerState(){
   }catch(e){console.error('loadServerState:',e);}
 }
 
+async function refreshLiveStats(){
+  try{
+    const [logsRes, stateRes] = await Promise.all([
+      fetch('/api/logs'),
+      fetch('/api/state')
+    ]);
+    const logs = await logsRes.json();
+    const state = await stateRes.json();
+
+    // Today's date in local time
+    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+
+    // Parse wins and losses from logs
+    let profit=0, loss=0, wins=0, losses=0;
+    logs.forEach(function(l){
+      if(!l.ts) return;
+      const logDate = new Date(l.ts).toLocaleDateString('en-CA');
+      if(logDate !== today) return;
+      if(l.message && l.message.includes('PROFIT TARGET')){
+        const m = l.message.match(/\+\$(\d+\.\d+)/);
+        if(m){ profit += parseFloat(m[1]); wins++; }
+      }
+      if(l.message && l.message.includes('STOP LOSS')){
+        const m = l.message.match(/-\$(\d+\.\d+)/);
+        if(m){ loss += parseFloat(m[1]); losses++; }
+      }
+    });
+
+    const trades = wins + losses;
+    const net = profit - loss;
+    const winRate = trades > 0 ? Math.round(wins/trades*100) : null;
+    const openPL = parseFloat(balances?.open_pl || 0);
+
+    // Update displays
+    document.getElementById('daily-profit-display').textContent = '$' + profit.toFixed(2);
+    document.getElementById('daily-profit-display').style.color = profit > 0 ? '#00ff88' : '#3a6a9c';
+    document.getElementById('daily-loss-display').textContent = '-$' + loss.toFixed(2);
+    document.getElementById('daily-loss-display').style.color = loss > 0 ? '#ff4466' : '#3a6a9c';
+
+    const netEl = document.getElementById('daily-net-display');
+    if(netEl){
+      netEl.textContent = (net >= 0 ? '+' : '') + '$' + net.toFixed(2);
+      netEl.style.color = net > 0 ? '#00ff88' : net < 0 ? '#ff4466' : '#e0f0ff';
+    }
+    document.getElementById('trades-today-display').textContent = trades;
+    document.getElementById('win-rate-display').textContent = winRate !== null ? winRate + '%' : '—';
+    document.getElementById('win-rate-display').style.color = winRate >= 50 ? '#00ff88' : winRate !== null ? '#ff4466' : '#3a6a9c';
+
+    const plEl = document.getElementById('open-pl-display');
+    if(plEl){
+      plEl.textContent = (openPL >= 0 ? '+' : '') + '$' + openPL.toFixed(2);
+      plEl.style.color = openPL > 0 ? '#00ff88' : openPL < 0 ? '#ff4466' : '#e0f0ff';
+    }
+
+    const upd = document.getElementById('stats-updated');
+    if(upd) upd.textContent = 'Live · updated ' + new Date().toLocaleTimeString();
+
+  } catch(e){ console.error('refreshLiveStats:', e); }
+}
+
 async function saveSettingsToServer(){
   try{
     await fetch('/api/settings',{
@@ -1041,6 +1103,10 @@ function switchTab(tab){
   document.querySelectorAll('.tab-btn').forEach((b,i)=>{b.className='tab-btn'+(tabs[i]===tab?' active':'');});
   document.getElementById('chat-panel').style.display=tab==='chat'?'flex':'none';
   document.getElementById('autoinvest-panel').style.display=tab==='autoinvest'?'block':'none';
+  if(tab==='autoinvest'){
+    refreshLiveStats();
+    if(!window.statsTimer) window.statsTimer=setInterval(refreshLiveStats,30000);
+  }
   document.getElementById('positions-panel').style.display=tab==='positions'?'block':'none';
   document.getElementById('journal-panel').style.display=tab==='journal'?'flex':'none';
   document.getElementById('orders-panel').style.display=tab==='orders'?'block':'none';
