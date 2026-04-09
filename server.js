@@ -374,14 +374,21 @@ var engineTimer = null, monitorTimer = null;
 async function runEngine() {
   var engineOn = await getState('engineOn', false);
   if (!engineOn) return;
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
   var session = await getState('session', null);
   var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var dailyLoss = await getState('dailyLoss', 0);
   var killSwitch = await getState('killSwitch', false);
   if (!session) { await addLog('skip', 'no session'); return; }
   if (killSwitch) { await addLog('stop', 'kill switch on'); return; }
-  if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
+  if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily loss limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
+  var dailyProfit = await getState('dailyProfit', 0);
+  if (settings.dailyProfitTarget && dailyProfit >= settings.dailyProfitTarget) {
+    await addLog('trade', '🎯 DAILY PROFIT TARGET HIT $' + dailyProfit.toFixed(2) + ' — stopping engine for the day!');
+    await setState('engineOn', false);
+    clearInterval(engineTimer); clearInterval(monitorTimer);
+    return;
+  }
   var positions = [];
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
   await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
@@ -451,6 +458,23 @@ async function runMonitor() {
         var totalPnl = pnlPer * Math.abs(pos.quantity||1);
         await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
         await closePos(pos, session);
+        // Track daily profit
+        var dp = await getState('dailyProfit', 0);
+        dp += totalPnl;
+        await setState('dailyProfit', dp);
+        await addLog('trade', 'Daily profit: $' + dp.toFixed(2) + ' / $' + (settings.dailyProfitTarget||500));
+        // Check if daily profit target hit — close all positions and stop
+        if (settings.dailyProfitTarget && dp >= settings.dailyProfitTarget) {
+          await addLog('trade', '🎯 DAILY PROFIT TARGET $' + settings.dailyProfitTarget + ' REACHED! Closing all positions and stopping.');
+          // Close all remaining positions
+          var allPos = await getPositions(session);
+          for (var cp = 0; cp < allPos.length; cp++) {
+            try { await closePos(allPos[cp], session); await addLog('trade', 'Closed: ' + allPos[cp].symbol); } catch(e) {}
+          }
+          await setState('engineOn', false);
+          clearInterval(engineTimer); clearInterval(monitorTimer);
+          return;
+        }
         // Record win in trades table
         try {
           var winTicker = pos.symbol.slice(0,4).trim();
@@ -542,12 +566,13 @@ app.post('/api/killswitch', async function(req, res) {
 
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
   var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
   var session = await getState('session', null);
-  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
+  var dailyProfit2 = await getState('dailyProfit', 0);
+  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit2, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
 });
 
 app.get('/api/logs', async function(req, res) {
@@ -627,7 +652,8 @@ function scheduleMidnightReset() {
   et.setHours(24, 0, 0, 0);
   setTimeout(async function() {
     await setState('dailyLoss', 0);
-    console.log('daily reset');
+    await setState('dailyProfit', 0);
+    console.log('daily reset — loss and profit counters cleared');
     scheduleMidnightReset();
   }, et - now);
 }
