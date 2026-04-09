@@ -90,7 +90,8 @@ function buildSymbol(ticker, type, strike) {
   var t = ticker.toUpperCase().trim();
   var ticker6 = (t + '      ').substring(0, 6);
   var s = parseFloat(strike);
-  if (t === 'SPY' || t === 'QQQ' || t === 'IWM' || t === 'GLD') {
+  // Round to nearest $5 for high-priced ETFs, $1 for everything else
+  if (t === 'SPY' || t === 'QQQ' || t === 'IWM') {
     s = Math.round(s / 5) * 5;
   } else {
     s = Math.round(s);
@@ -314,7 +315,7 @@ async function runEngine() {
   if (!engineOn) return;
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
   var session = await getState('session', null);
-  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'QQQ', 'MSFT']);
+  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN']);
   var dailyLoss = await getState('dailyLoss', 0);
   var killSwitch = await getState('killSwitch', false);
   if (!session) { await addLog('skip', 'no session'); return; }
@@ -445,7 +446,7 @@ app.post('/api/killswitch', async function(req, res) {
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
-  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'QQQ', 'MSFT']);
+  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
   var session = await getState('session', null);
