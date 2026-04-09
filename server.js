@@ -429,14 +429,20 @@ async function runMonitor() {
       if (!pos.cost_basis || !pos.market_value) continue;
       var pnlPer = (pos.market_value - pos.cost_basis) / Math.abs(pos.quantity || 1);
       if (pnlPer >= settings.profitTarget) {
-        await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + pnlPer.toFixed(2));
+        var totalPnl = pnlPer * Math.abs(pos.quantity||1);
+        await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
         await closePos(pos, session);
+        // Record win in trades table
+        try { await pool.query("UPDATE trades SET result='win', pnl=$1 WHERE order_id IS NOT NULL AND result='open' AND ticker=$2 ORDER BY ts DESC LIMIT 1",[totalPnl.toFixed(2),pos.symbol.slice(0,4).trim()]); } catch(e){}
         setTimeout(runEngine, 3000);
       } else if (pnlPer <= -settings.stopLoss) {
-        await addLog('stop', 'STOP LOSS: ' + pos.symbol + ' -$' + Math.abs(pnlPer).toFixed(2));
+        var totalLoss = pnlPer * Math.abs(pos.quantity||1);
+        await addLog('stop', 'STOP LOSS: ' + pos.symbol + ' -$' + Math.abs(totalLoss).toFixed(2));
         await closePos(pos, session);
         dailyLoss += Math.abs(pos.market_value - pos.cost_basis);
         await setState('dailyLoss', dailyLoss);
+        // Record loss in trades table
+        try { await pool.query("UPDATE trades SET result='loss', pnl=$1 WHERE order_id IS NOT NULL AND result='open' AND ticker=$2 ORDER BY ts DESC LIMIT 1",[totalLoss.toFixed(2),pos.symbol.slice(0,4).trim()]); } catch(e){}
         setTimeout(runEngine, 3000);
       }
     }
@@ -523,8 +529,53 @@ app.get('/api/logs', async function(req, res) {
 });
 
 app.get('/api/trades', async function(req, res) {
-  try { var r = await pool.query('SELECT * FROM trades ORDER BY ts DESC LIMIT 50'); res.json(r.rows); }
+  try { var r = await pool.query('SELECT * FROM trades ORDER BY ts DESC LIMIT 200'); res.json(r.rows); }
   catch(e) { res.json([]); }
+});
+
+// Journal stats endpoint
+app.get('/api/journal', async function(req, res) {
+  try {
+    var r = await pool.query('SELECT * FROM trades ORDER BY ts DESC');
+    var trades = r.rows;
+    var closed = trades.filter(function(t){return t.result==='win'||t.result==='loss';});
+    var wins = closed.filter(function(t){return t.result==='win';});
+    var losses = closed.filter(function(t){return t.result==='loss';});
+    var totalPnl = closed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var winPnl = wins.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var lossPnl = losses.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var avgWin = wins.length ? winPnl/wins.length : 0;
+    var avgLoss = losses.length ? lossPnl/losses.length : 0;
+    var winRate = closed.length ? (wins.length/closed.length*100) : 0;
+    var profitFactor = Math.abs(lossPnl) > 0 ? winPnl/Math.abs(lossPnl) : 0;
+    // Group by day
+    var byDay = {};
+    closed.forEach(function(t){
+      var day = t.ts.toISOString ? t.ts.toISOString().slice(0,10) : String(t.ts).slice(0,10);
+      if(!byDay[day]) byDay[day]={date:day,trades:0,wins:0,losses:0,pnl:0};
+      byDay[day].trades++;
+      if(t.result==='win')byDay[day].wins++;
+      else byDay[day].losses++;
+      byDay[day].pnl+=parseFloat(t.pnl)||0;
+    });
+    var dailyStats = Object.values(byDay).sort(function(a,b){return b.date.localeCompare(a.date);});
+    res.json({
+      totalTrades:closed.length, openTrades:trades.filter(function(t){return t.result==='open';}).length,
+      wins:wins.length, losses:losses.length, winRate:winRate.toFixed(1),
+      totalPnl:totalPnl.toFixed(2), avgWin:avgWin.toFixed(2), avgLoss:avgLoss.toFixed(2),
+      profitFactor:profitFactor.toFixed(2), dailyStats:dailyStats, recentTrades:trades.slice(0,20)
+    });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Update trade result when closed
+app.post('/api/trades/:id/close', async function(req, res) {
+  try {
+    var pnl = parseFloat(req.body.pnl) || 0;
+    var result = pnl >= 0 ? 'win' : 'loss';
+    await pool.query('UPDATE trades SET result=$1, pnl=$2 WHERE id=$3',[result,pnl,req.params.id]);
+    res.json({ok:true});
+  } catch(e) { res.status(500).json({error:e.message}); }
 });
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
