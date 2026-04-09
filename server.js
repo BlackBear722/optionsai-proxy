@@ -280,19 +280,86 @@ async function getPositions(session) {
   return Array.isArray(raw) ? raw : [raw];
 }
 
+async function getValidStrike(ticker, expiry, type, targetStrike, session) {
+  // Look up real available strikes from Tradier
+  try {
+    var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+    var url = base + '/markets/options/strikes?symbol=' + ticker + '&expiration=' + expiry;
+    var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' } });
+    var text = await r.text();
+    var data = JSON.parse(text);
+    var strikes = data && data.strikes && data.strikes.strike;
+    if (!strikes) { console.log('No strikes found for ' + ticker + ' ' + expiry); return targetStrike; }
+    var arr = Array.isArray(strikes) ? strikes : [strikes];
+    // Find closest strike to target
+    var closest = arr.reduce(function(prev, curr) {
+      return Math.abs(curr - targetStrike) < Math.abs(prev - targetStrike) ? curr : prev;
+    });
+    console.log('Target strike: ' + targetStrike + ' -> Closest available: ' + closest);
+    return closest;
+  } catch(e) {
+    console.error('getValidStrike error:', e.message);
+    return targetStrike;
+  }
+}
+
+async function getValidExpiry(ticker, session) {
+  // Get available expiration dates from Tradier
+  try {
+    var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+    var url = base + '/markets/options/expirations?symbol=' + ticker + '&includeAllRoots=true';
+    var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' } });
+    var data = await r.json();
+    var dates = data && data.expirations && data.expirations.date;
+    if (!dates) return null;
+    var arr = Array.isArray(dates) ? dates : [dates];
+    // Find next expiry at least 2 days from now
+    var now = new Date();
+    var cutoff = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+    var valid = arr.filter(function(d) { return new Date(d) >= cutoff; });
+    if (!valid.length) return null;
+    console.log('Valid expiries for ' + ticker + ':', valid.slice(0, 3));
+    return valid[0]; // nearest valid expiry
+  } catch(e) {
+    console.error('getValidExpiry error:', e.message);
+    return null;
+  }
+}
+
 async function placeTrade(trade, session) {
-  var built = buildSymbol(trade.ticker, trade.type, trade.strike);
+  // Get real expiry from Tradier
+  var expiry = await getValidExpiry(trade.ticker, session);
+  if (!expiry) {
+    var built0 = buildSymbol(trade.ticker, trade.type, trade.strike);
+    expiry = built0.expiry;
+  }
+  await addLog('entry', 'Using expiry: ' + expiry + ' for ' + trade.ticker);
+
+  // Get real strike from Tradier
+  var validStrike = await getValidStrike(trade.ticker, expiry, trade.type, trade.strike, session);
+
+  // Build symbol with real expiry and strike
+  var exp = { formatted: expiry };
+  var dt = new Date(expiry + 'T12:00:00Z');
+  exp.yy = String(dt.getUTCFullYear()).slice(2);
+  exp.mm = ('0' + (dt.getUTCMonth() + 1)).slice(-2);
+  exp.dd = ('0' + dt.getUTCDate()).slice(-2);
+  var t = trade.ticker.toUpperCase().trim();
+  var strikeInt = Math.round(parseFloat(validStrike) * 1000);
+  var strikeStr = ('00000000' + strikeInt).slice(-8);
+  var symbol = t + exp.yy + exp.mm + exp.dd + trade.type[0].toUpperCase() + strikeStr;
+
   var orderBody = {
     class: 'option',
     symbol: trade.ticker,
-    option_symbol: built.symbol,
+    option_symbol: symbol,
     side: 'buy_to_open',
     quantity: String(trade.contracts),
     type: 'limit',
     duration: 'day',
     price: String(trade.limitPrice)
   };
-  await addLog('entry', 'ORDER: sym=' + built.symbol + ' expiry=' + built.expiry + ' strike=' + built.strike + ' price=' + trade.limitPrice);
+  await addLog('entry', 'ORDER: sym=' + symbol + ' expiry=' + expiry + ' strike=' + validStrike + ' price=' + trade.limitPrice);
   var result = await tradierReq('/accounts/' + session.accountId + '/orders', 'POST', orderBody, session);
   await addLog('entry', 'RESULT: ' + JSON.stringify(result));
   return result;
