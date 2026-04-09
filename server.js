@@ -391,6 +391,15 @@ async function runEngine() {
   }
   var positions = [];
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
+  // Only scan during market hours (9:30am - 4:00pm ET)
+  var etNow2 = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  var etDate2 = new Date(etNow2);
+  var mid2 = (etDate2.getHours() - 9) * 60 + etDate2.getMinutes() - 30;
+  if (mid2 < 0 || mid2 > 390) {
+    await addLog('skip', 'market closed — engine paused until 9:30am ET');
+    return;
+  }
+
   await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
   if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions reached (' + positions.length + '/' + settings.maxPositions + ') — not buying'); return; }
   await addLog('entry', 'scanning ' + watchlist.length + ' tickers: ' + watchlist.join(', '));
@@ -428,6 +437,15 @@ async function runMonitor() {
   var session = await getState('session', null);
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25 });
   if (!engineOn || killSwitch || !session) return;
+
+  // Only monitor during market hours (9:30am - 4:00pm ET)
+  var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  var etDate = new Date(etNow);
+  var minutesIntoDay = (etDate.getHours() - 9) * 60 + etDate.getMinutes() - 30;
+  if (minutesIntoDay < 0 || minutesIntoDay > 390) {
+    console.log('Market closed — skipping monitor check');
+    return;
+  }
   try {
     var positions = await getPositions(session);
     var dailyLoss = await getState('dailyLoss', 0);
