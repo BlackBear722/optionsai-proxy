@@ -88,7 +88,8 @@ function getNextExpiry() {
 function buildSymbol(ticker, type, strike) {
   var exp = getNextExpiry();
   var t = ticker.toUpperCase().trim();
-  var ticker6 = (t + '      ').substring(0, 6);
+  // Tradier does NOT want space padding — just ticker + date + type + strike
+  var ticker6 = t;  // no padding
   var s = parseFloat(strike);
   // Round to nearest $5 for high-priced ETFs, $1 for everything else
   if (t === 'SPY' || t === 'QQQ' || t === 'IWM') {
