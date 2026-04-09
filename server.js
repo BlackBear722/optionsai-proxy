@@ -452,7 +452,11 @@ async function runMonitor() {
         await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
         await closePos(pos, session);
         // Record win in trades table
-        try { await pool.query("UPDATE trades SET result='win', pnl=$1 WHERE order_id IS NOT NULL AND result='open' AND ticker=$2 ORDER BY ts DESC LIMIT 1",[totalPnl.toFixed(2),pos.symbol.slice(0,4).trim()]); } catch(e){}
+        try {
+          var winTicker = pos.symbol.slice(0,4).trim();
+          await pool.query("UPDATE trades SET result='win', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)",[totalPnl.toFixed(2), winTicker, winTicker]);
+          await addLog('trade', 'Journal updated: WIN +$' + totalPnl.toFixed(2) + ' on ' + winTicker);
+        } catch(e){ console.error('win record error:', e.message); }
         setTimeout(runEngine, 3000);
       } else if (pnlPer <= -settings.stopLoss) {
         var totalLoss = pnlPer * Math.abs(pos.quantity||1);
@@ -461,7 +465,11 @@ async function runMonitor() {
         dailyLoss += Math.abs(pos.market_value - pos.cost_basis);
         await setState('dailyLoss', dailyLoss);
         // Record loss in trades table
-        try { await pool.query("UPDATE trades SET result='loss', pnl=$1 WHERE order_id IS NOT NULL AND result='open' AND ticker=$2 ORDER BY ts DESC LIMIT 1",[totalLoss.toFixed(2),pos.symbol.slice(0,4).trim()]); } catch(e){}
+        try {
+          var lossTicker = pos.symbol.slice(0,4).trim();
+          await pool.query("UPDATE trades SET result='loss', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)",[totalLoss.toFixed(2), lossTicker, lossTicker]);
+          await addLog('stop', 'Journal updated: LOSS -$' + Math.abs(totalLoss).toFixed(2) + ' on ' + lossTicker);
+        } catch(e){ console.error('loss record error:', e.message); }
         setTimeout(runEngine, 3000);
       }
     }
