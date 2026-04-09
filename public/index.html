@@ -487,18 +487,24 @@ function disconnect(){
 
 // ── ACCOUNT ────────────────────────────────────────────────────────────────────
 async function loadAccountData(){
-  if(!session)return;
   try{
+    // Use server API state to get account ID and live status
+    const stateRes=await fetch('/api/state');
+    const state=await stateRes.json();
+    if(!state.hasSession||!state.accountId)return;
+    const accountId=state.accountId;
+    const isLive=state.isLive||false;
+    // Use server-side tradier proxy which has token stored
     const[balRes,posRes]=await Promise.all([
-      fetch(`${PROXY_URL}/accounts/${session.accountId}/balances`,{headers:{'Authorization':`Bearer ${session.token}`,'x-tradier-live':session.isLive?'true':'false'}}),
-      fetch(`${PROXY_URL}/accounts/${session.accountId}/positions`,{headers:{'Authorization':`Bearer ${session.token}`,'x-tradier-live':session.isLive?'true':'false'}})
+      fetch('/tradier/accounts/'+accountId+'/balances',{headers:{'x-tradier-live':isLive?'true':'false'}}),
+      fetch('/tradier/accounts/'+accountId+'/positions',{headers:{'x-tradier-live':isLive?'true':'false'}})
     ]);
     const bd=await balRes.json();const pd=await posRes.json();
     balances=bd?.balances;
     const rp=pd?.positions?.position;
     positions=rp?(Array.isArray(rp)?rp:[rp]):[];
     updateStats();renderPositions();
-  }catch(e){console.error(e);}
+  }catch(e){console.error('loadAccountData error:',e);}
 }
 
 function updateStats(){
