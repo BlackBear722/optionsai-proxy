@@ -382,7 +382,7 @@ async function runEngine() {
   if (!engineOn) return;
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
   var session = await getState('session', null);
-  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN']);
+  var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var dailyLoss = await getState('dailyLoss', 0);
   var killSwitch = await getState('killSwitch', false);
   if (!session) { await addLog('skip', 'no session'); return; }
@@ -515,7 +515,7 @@ app.post('/api/killswitch', async function(req, res) {
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
-  var watchlist = await getState('watchlist', ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN']);
+  var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
   var session = await getState('session', null);
