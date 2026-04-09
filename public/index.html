@@ -177,6 +177,7 @@
     <div class="topbar-right">
       <div class="stat-label" id="cash-stat" style="display:none"></div>
       <div class="stat-label" id="equity-stat" style="display:none"></div>
+      <div class="stat-label" id="pnl-stat" style="display:none"></div>
       <button class="kill-btn" id="kill-btn" onclick="toggleKillSwitch()">🛑 KILL SWITCH</button>
       <button class="topbar-btn" onclick="loadAccountData()">↻</button>
       <button class="topbar-btn" onclick="disconnect()">DISCONNECT</button>
@@ -191,6 +192,14 @@
 
   <!-- CHAT PANEL -->
   <div id="chat-panel">
+    <div id="dashboard-bar" style="display:none;padding:10px 16px;background:#0a1628;border-bottom:1px solid #1a3a5c;flex-shrink:0">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <div id="db-equity" style="font-size:12px;color:#8aaccc"></div>
+        <div id="db-cash" style="font-size:12px;color:#8aaccc"></div>
+        <div id="db-pnl" style="font-size:12px;color:#8aaccc"></div>
+        <div id="db-positions" style="font-size:12px;color:#8aaccc"></div>
+      </div>
+    </div>
     <div class="messages" id="messages"></div>
     <div class="pending-trade paper" id="pending-trade" style="display:none">
       <div class="pending-title paper" id="pending-title">📄 PAPER TRADE — CONFIRM?</div>
@@ -494,10 +503,29 @@ async function loadAccountData(){
 
 function updateStats(){
   if(!balances)return;
-  const cash=balances?.cash?.cash_available,eq=balances?.total_equity;
-  const ce=document.getElementById('cash-stat'),ee=document.getElementById('equity-stat');
-  if(cash!==undefined){ce.innerHTML=`Cash: <strong>$${cash.toFixed(0)}</strong>`;ce.style.display='block';}
-  if(eq!==undefined){ee.innerHTML=`Equity: <strong>$${eq.toFixed(0)}</strong>`;ee.style.display='block';}
+  const cash=balances?.cash?.cash_available;
+  const eq=balances?.total_equity;
+  const openPL=balances?.open_pl;
+  const ce=document.getElementById('cash-stat');
+  const ee=document.getElementById('equity-stat');
+  const pe=document.getElementById('pnl-stat');
+  if(cash!==undefined){ce.innerHTML=`Cash: <strong>$${parseFloat(cash).toFixed(0)}</strong>`;ce.style.display='block';}
+  if(eq!==undefined){ee.innerHTML=`Equity: <strong>$${parseFloat(eq).toFixed(0)}</strong>`;ee.style.display='block';}
+  if(openPL!==undefined&&pe){
+    const pl=parseFloat(openPL)||0;
+    pe.innerHTML=`P&L: <strong style="color:${pl>=0?'#00ff88':'#ff4466'}">${pl>=0?'+':''}$${pl.toFixed(2)}</strong>`;
+    pe.style.display='block';
+  }
+  // Update dashboard bar
+  const db=document.getElementById('dashboard-bar');
+  if(db){
+    db.style.display='flex';
+    const pl2=parseFloat(openPL)||0;
+    document.getElementById('db-equity').innerHTML=`💰 Equity: <strong style="color:#e0f0ff">$${parseFloat(eq||0).toFixed(0)}</strong>`;
+    document.getElementById('db-cash').innerHTML=`💵 Cash: <strong style="color:#e0f0ff">$${parseFloat(cash||0).toFixed(0)}</strong>`;
+    document.getElementById('db-pnl').innerHTML=`📊 P&L: <strong style="color:${pl2>=0?'#00ff88':'#ff4466'}">${pl2>=0?'+':''}$${pl2.toFixed(2)}</strong>`;
+    document.getElementById('db-positions').innerHTML=`📋 Positions: <strong style="color:#e0f0ff">${positions.length}</strong>`;
+  }
 }
 
 function renderPositions(){
@@ -818,6 +846,10 @@ let logPoller=null;
 let lastLogTs=null;
 function startLogPoller(){
   if(logPoller)clearInterval(logPoller);
+  // Auto-refresh account data every 30 seconds
+  setInterval(async()=>{
+    if(session) await loadAccountData();
+  }, 30000);
   logPoller=setInterval(async()=>{
     try{
       const res=await fetch('/api/logs');
