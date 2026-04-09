@@ -355,9 +355,8 @@ async function placeTrade(trade, session) {
     option_symbol: symbol,
     side: 'buy_to_open',
     quantity: String(trade.contracts),
-    type: 'limit',
-    duration: 'day',
-    price: String(trade.limitPrice)
+    type: 'market',
+    duration: 'day'
   };
   await addLog('entry', 'ORDER: sym=' + symbol + ' expiry=' + expiry + ' strike=' + validStrike + ' price=' + trade.limitPrice);
   var result = await tradierReq('/accounts/' + session.accountId + '/orders', 'POST', orderBody, session);
@@ -410,6 +409,8 @@ async function runEngine() {
       if (orderId) {
         await addLog('trade', 'ORDER PLACED: ' + best.ticker + ' ' + trade.type + ' ID:' + orderId);
         await addTrade({ ticker: trade.ticker, type: trade.type, strike: trade.strike, expiry: '', contracts: trade.contracts, premium: trade.limitPrice, orderId: orderId, result: 'open' });
+        // Wait for position to register before next scan
+        await new Promise(function(r) { setTimeout(r, 10000); });
       } else {
         await addLog('stop', 'order failed: ' + JSON.stringify(orderResult));
       }
