@@ -426,8 +426,27 @@ async function runMonitor() {
     var dailyLoss = await getState('dailyLoss', 0);
     for (var i = 0; i < positions.length; i++) {
       var pos = positions[i];
-      if (!pos.cost_basis || !pos.market_value) continue;
-      var pnlPer = (pos.market_value - pos.cost_basis) / Math.abs(pos.quantity || 1);
+      if (!pos.cost_basis) continue;
+      // Fetch live option price from Tradier instead of relying on stale market_value
+      var currentPrice = null;
+      try {
+        var base2 = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+        var qr = await fetch(base2 + '/markets/quotes?symbols=' + pos.symbol + '&greeks=false', {
+          headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+        });
+        var qdata = await qr.json();
+        var quote = qdata && qdata.quotes && qdata.quotes.quote;
+        if (quote && quote.last && parseFloat(quote.last) > 0) {
+          currentPrice = parseFloat(quote.last);
+        } else if (quote && quote.bid && quote.ask) {
+          currentPrice = (parseFloat(quote.bid) + parseFloat(quote.ask)) / 2;
+        }
+      } catch(qe) { console.error('quote fetch error:', qe.message); }
+      // Fall back to market_value if quote unavailable
+      var entryPricePerContract = pos.cost_basis / Math.abs(pos.quantity || 1) / 100;
+      var livePricePerContract = currentPrice || (pos.market_value ? pos.market_value / Math.abs(pos.quantity || 1) / 100 : entryPricePerContract);
+      var pnlPer = livePricePerContract - entryPricePerContract;
+      await addLog('entry', 'monitor ' + pos.symbol + ' entry:$' + entryPricePerContract.toFixed(2) + ' live:$' + livePricePerContract.toFixed(2) + ' pnl:$' + pnlPer.toFixed(2));
       if (pnlPer >= settings.profitTarget) {
         var totalPnl = pnlPer * Math.abs(pos.quantity||1);
         await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
