@@ -106,44 +106,7 @@ function buildSymbol(ticker, type, strike) {
 
 // Fetch market data
 async function fetchQuote(ticker) {
-  // Try Alpha Vantage first
-  try {
-    var avKey = process.env.ALPHA_VANTAGE_KEY || 'demo';
-    var url = 'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=' + ticker + '&apikey=' + avKey;
-    var r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    var data = await r.json();
-    var q = data['Global Quote'];
-    if (q && q['05. price'] && parseFloat(q['05. price']) > 0) {
-      var price = parseFloat(q['05. price']);
-      var prev = parseFloat(q['08. previous close']) || price;
-      var chgStr = q['10. change percent'] || '0%';
-      var chgPct = parseFloat(chgStr.replace('%', '')) || 0;
-      var vol = parseInt(q['06. volume']) || 0;
-      var high = parseFloat(q['03. high']) || price;
-      var low = parseFloat(q['04. low']) || price;
-      var vwap = ((high + low + price) / 3).toFixed(2);
-      var rsi = chgPct > 3 ? 68 : chgPct > 1 ? 58 : chgPct > 0 ? 52 : chgPct > -1 ? 46 : chgPct > -3 ? 38 : 30;
-      var bull = chgPct > 0.5 ? 2 : chgPct > 0 ? 1 : 0;
-      var bear = chgPct < -0.5 ? 2 : chgPct < 0 ? 1 : 0;
-      var spread = price > 0 ? (((high - low) / price) * 100).toFixed(3) : '0.20';
-      var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-      var etD = new Date(etNow);
-      var mid = (etD.getHours() - 9) * 60 + etD.getMinutes() - 30;
-      var isOpen = mid >= 0 && mid <= 390;
-      console.log('AV ' + ticker + ' $' + price + ' ' + chgPct.toFixed(2) + '%');
-      return {
-        ticker: ticker, price: price.toFixed(2), changePct: chgPct.toFixed(2),
-        volume: vol, barVolumeRatio: '1.50', rsi: rsi.toString(),
-        ma9: price.toFixed(2), vwap: vwap, spreadEstPct: spread,
-        last3Candles: [{ open: prev.toFixed(2), close: price.toFixed(2), bullish: price > prev, vol: vol }],
-        consecutiveBull: bull, consecutiveBear: bear,
-        intradayHigh: high.toFixed(2), intradayLow: low.toFixed(2),
-        isMarketOpen: isOpen, minutesIntoDay: mid,
-        marketState: isOpen ? 'REGULAR' : 'CLOSED', source: 'alphavantage'
-      };
-    }
-  } catch(e) { console.error('AV error ' + ticker + ': ' + e.message); }
-
+  // Use Yahoo Finance for live intraday data (Alpha Vantage free tier is too stale)
   // Yahoo fallback
   try {
     var r2 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=1d', {
@@ -390,7 +353,8 @@ async function runEngine() {
   if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
   var positions = [];
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
-  if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions ' + settings.maxPositions); return; }
+  await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
+  if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions reached (' + positions.length + '/' + settings.maxPositions + ') — not buying'); return; }
   await addLog('entry', 'scanning ' + watchlist.length + ' tickers: ' + watchlist.join(', '));
   var results = [];
   for (var i = 0; i < watchlist.length; i++) {
