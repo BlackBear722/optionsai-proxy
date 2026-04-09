@@ -106,8 +106,53 @@ function buildSymbol(ticker, type, strike) {
 
 // Fetch market data
 async function fetchQuote(ticker) {
-  // Use Yahoo Finance for live intraday data (Alpha Vantage free tier is too stale)
-  // Yahoo fallback
+  // Use Tradier quotes API — real-time, no rate limits, already authenticated
+  var session = await getState('session', null);
+  if (session && session.token) {
+    try {
+      var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+      var r = await fetch(base + '/markets/quotes?symbols=' + ticker + '&greeks=false', {
+        headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+      });
+      var data = await r.json();
+      var q = data && data.quotes && data.quotes.quote;
+      if (q && q.last && parseFloat(q.last) > 0) {
+        var price = parseFloat(q.last);
+        var prev = parseFloat(q.prevclose) || price;
+        var chgPct = prev > 0 ? ((price - prev) / prev * 100) : 0;
+        var high = parseFloat(q.high) || price;
+        var low = parseFloat(q.low) || price;
+        var vol = parseInt(q.volume) || 0;
+        var avgVol = parseInt(q.average_volume) || vol || 1;
+        var volRatio = vol / avgVol;
+        var vwap = ((high + low + price) / 3).toFixed(2);
+        var spread = (q.ask && q.bid) ? (((parseFloat(q.ask) - parseFloat(q.bid)) / price) * 100).toFixed(3) : (((high-low)/price)*100).toFixed(3);
+        // RSI approximation from price change
+        var rsi = chgPct > 3 ? 68 : chgPct > 1 ? 58 : chgPct > 0 ? 52 : chgPct > -1 ? 46 : chgPct > -3 ? 38 : 30;
+        var bull = chgPct > 0.5 ? 2 : chgPct > 0 ? 1 : 0;
+        var bear = chgPct < -0.5 ? 2 : chgPct < 0 ? 1 : 0;
+        var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+        var etD = new Date(etNow);
+        var mid = (etD.getHours() - 9) * 60 + etD.getMinutes() - 30;
+        var isOpen = q.tradeable === true || (mid >= 0 && mid <= 390);
+        console.log('Tradier ' + ticker + ' $' + price + ' ' + chgPct.toFixed(2) + '% spread:' + spread + '%');
+        return {
+          ticker: ticker, price: price.toFixed(2), changePct: chgPct.toFixed(2),
+          volume: vol, volumeRatio: volRatio.toFixed(2), barVolumeRatio: volRatio.toFixed(2),
+          rsi: rsi.toString(), ma9: price.toFixed(2), vwap: vwap,
+          spreadEstPct: spread,
+          last3Candles: [{ open: prev.toFixed(2), close: price.toFixed(2), bullish: price > prev, vol: vol }],
+          consecutiveBull: bull, consecutiveBear: bear,
+          intradayHigh: high.toFixed(2), intradayLow: low.toFixed(2),
+          bid: q.bid, ask: q.ask,
+          isMarketOpen: isOpen, minutesIntoDay: mid,
+          marketState: isOpen ? 'REGULAR' : 'CLOSED', source: 'tradier'
+        };
+      }
+    } catch(e) { console.error('Tradier quote error ' + ticker + ': ' + e.message); }
+  }
+
+  // Yahoo Finance fallback
   try {
     var r2 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=1d', {
       headers: {
@@ -133,36 +178,22 @@ async function fetchQuote(ticker) {
     var high2 = highs2.length ? Math.max.apply(null, highs2) : price2;
     var low2 = lows2.length ? Math.min.apply(null, lows2) : price2;
     var bull2 = 0, bear2 = 0;
-    for (var i = closes2.length - 1; i >= Math.max(0, closes2.length - 4); i--) {
-      if (closes2[i] > opens2[i]) bull2++; else break;
-    }
-    for (var j = closes2.length - 1; j >= Math.max(0, closes2.length - 4); j--) {
-      if (closes2[j] < opens2[j]) bear2++; else break;
-    }
+    for (var i = closes2.length - 1; i >= Math.max(0, closes2.length - 4); i--) { if (closes2[i] > opens2[i]) bull2++; else break; }
+    for (var j = closes2.length - 1; j >= Math.max(0, closes2.length - 4); j--) { if (closes2[j] < opens2[j]) bear2++; else break; }
     var rsi2 = 50;
     if (closes2.length > 14) {
       var g = 0, l = 0;
-      for (var k = closes2.length - 14; k < closes2.length; k++) {
-        var diff = closes2[k] - closes2[k - 1];
-        if (diff > 0) g += diff; else l += Math.abs(diff);
-      }
-      var ag = g / 14, al = l / 14;
-      rsi2 = al === 0 ? 100 : Math.round(100 - (100 / (1 + ag / al)));
+      for (var k = closes2.length - 14; k < closes2.length; k++) { var diff = closes2[k] - closes2[k-1]; if (diff > 0) g += diff; else l += Math.abs(diff); }
+      var ag = g/14, al = l/14;
+      rsi2 = al === 0 ? 100 : Math.round(100-(100/(1+ag/al)));
     }
     var vwap2 = price2.toFixed(2);
-    try {
-      var vols2 = q2 && q2.volume ? q2.volume.filter(function(v) { return v != null; }) : [];
-      var sp = 0, sv = 0;
-      for (var vi = 0; vi < closes2.length; vi++) {
-        if (closes2[vi] && vols2[vi]) { sp += closes2[vi] * vols2[vi]; sv += vols2[vi]; }
-      }
-      if (sv > 0) vwap2 = (sp / sv).toFixed(2);
-    } catch(e2) {}
-    var spread2 = (high2 && low2 && price2 && high2 > low2) ? (((high2 - low2) / price2) * 100).toFixed(3) : '0.20';
+    try { var vols2 = q2 && q2.volume ? q2.volume.filter(function(v){return v!=null;}) : []; var sp=0,sv=0; for(var vi=0;vi<closes2.length;vi++){if(closes2[vi]&&vols2[vi]){sp+=closes2[vi]*vols2[vi];sv+=vols2[vi];}} if(sv>0)vwap2=(sp/sv).toFixed(2); } catch(e2) {}
+    var spread2 = (high2 && low2 && price2 && high2 > low2) ? (((high2-low2)/price2)*100).toFixed(3) : '0.20';
     var etNow2 = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
     var etD2 = new Date(etNow2);
-    var mid2 = (etD2.getHours() - 9) * 60 + etD2.getMinutes() - 30;
-    var isOpen2 = mid2 >= 0 && mid2 <= 390;
+    var mid2 = (etD2.getHours()-9)*60+etD2.getMinutes()-30;
+    var isOpen2 = mid2>=0&&mid2<=390;
     console.log('Yahoo ' + ticker + ' $' + price2 + ' ' + chgPct2.toFixed(2) + '%');
     return {
       ticker: ticker, price: price2.toFixed(2), changePct: chgPct2.toFixed(2),
@@ -174,9 +205,9 @@ async function fetchQuote(ticker) {
       marketState: meta.marketState, source: 'yahoo'
     };
   } catch(e) { console.error('Yahoo error ' + ticker + ': ' + e.message); }
-
   return null;
 }
+
 
 app.get('/quote/:ticker', async function(req, res) {
   var d = await fetchQuote(req.params.ticker.toUpperCase());
@@ -343,7 +374,7 @@ var engineTimer = null, monitorTimer = null;
 async function runEngine() {
   var engineOn = await getState('engineOn', false);
   if (!engineOn) return;
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
   var session = await getState('session', null);
   var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var dailyLoss = await getState('dailyLoss', 0);
@@ -360,7 +391,7 @@ async function runEngine() {
   for (var i = 0; i < watchlist.length; i++) {
     var result = await scanTicker(watchlist[i], settings);
     results.push(result);
-    if (i < watchlist.length - 1) await new Promise(function(r) { setTimeout(r, 13000); });
+    // No delay needed - Tradier API has no rate limits
   }
   var signals = results.filter(function(r) { return r.signal === 'BUY_CALL' || r.signal === 'BUY_PUT'; });
   if (signals.length > 0) {
@@ -418,7 +449,7 @@ function startTimers(schedule) {
   var msMap = { '1min': 60000, '2min': 120000, '5min': 300000, '10min': 600000, '15min': 900000, '30min': 1800000 };
   var ms = msMap[schedule] || 300000;
   engineTimer = setInterval(runEngine, ms);
-  monitorTimer = setInterval(runMonitor, 60000);
+  monitorTimer = setInterval(runMonitor, 30000);
   console.log('timers: ' + schedule);
 }
 
@@ -478,7 +509,7 @@ app.post('/api/killswitch', async function(req, res) {
 
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 3, contracts: 1, schedule: '5min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
   var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
