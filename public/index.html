@@ -261,6 +261,10 @@
         <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-max" value="500" min="10" onchange="updateSettings()"></div>
       </div>
       <div class="setting-row">
+        <span>Daily profit target <span style="color:#00ff88;font-size:9px">AUTO-STOP</span></span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-profit-target" value="200" min="10" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
         <span>Contracts per trade</span>
         <input type="number" class="setting-input" id="contracts-per-trade" value="1" min="1" max="10" onchange="updateSettings()">
       </div>
@@ -289,6 +293,12 @@
         <input type="text" id="add-ticker-input" placeholder="Add ticker (e.g. TSLA)" maxlength="6" onkeydown="if(event.key==='Enter')addTicker()" style="text-transform:uppercase"/>
         <button onclick="addTicker()">+ ADD</button>
       </div>
+    </div>
+
+    <!-- Daily profit target hit banner -->
+    <div id="profit-target-banner" style="display:none;background:#001a0a;border:1px solid #00ff8844;border-radius:8px;padding:12px 16px;margin-bottom:8px">
+      <div style="font-size:11px;color:#00ff88;font-weight:700">🎯 DAILY PROFIT TARGET REACHED</div>
+      <div style="font-size:10px;color:#3a6a9c;margin-top:3px">Engine stopped. Auto-restarts at 9:30am ET next trading day.</div>
     </div>
 
     <!-- Daily loss bar -->
@@ -850,6 +860,7 @@ async function loadServerState(){
       document.getElementById('profit-target').value=settings.profitTarget||1.00;
       document.getElementById('stop-loss-dollar').value=settings.stopLoss||0.10;
       document.getElementById('daily-max').value=settings.dailyMax||500;
+      document.getElementById('daily-profit-target').value=settings.dailyProfitTarget||200;
       document.getElementById('contracts-per-trade').value=settings.contracts||1;
       document.getElementById('max-positions').value=settings.maxPositions||3;
       document.getElementById('scan-schedule').value=settings.schedule||'5min';
@@ -863,6 +874,9 @@ async function loadServerState(){
       document.getElementById('next-scan-label').textContent='Engine running on server ☁️';
     }
     document.getElementById('daily-loss-display').textContent=`$${(state.dailyLoss||0).toFixed(2)}`;
+    // Show profit target hit banner if applicable
+    const banner=document.getElementById('profit-target-banner');
+    if(banner) banner.style.display=state.profitTargetHit?'block':'none';
   }catch(e){console.error('loadServerState:',e);}
 }
 
@@ -917,6 +931,10 @@ async function refreshLiveStats(){
 
     const upd = document.getElementById('stats-updated');
     if(upd) upd.textContent = 'Live · updated ' + new Date().toLocaleTimeString();
+
+    // Show/hide profit target hit banner
+    const banner = document.getElementById('profit-target-banner');
+    if(banner) banner.style.display = state.profitTargetHit ? 'block' : 'none';
 
   } catch(e){ console.error('refreshLiveStats:', e); }
 }
@@ -1068,6 +1086,7 @@ function updateSettings(){
   settings.profitTarget=parseFloat(document.getElementById('profit-target').value)||1.00;
   settings.stopLoss=parseFloat(document.getElementById('stop-loss-dollar').value)||0.10;
   settings.dailyMax=parseFloat(document.getElementById('daily-max').value)||500;
+  settings.dailyProfitTarget=parseFloat(document.getElementById('daily-profit-target').value)||200;
   settings.contracts=parseInt(document.getElementById('contracts-per-trade').value)||1;
   settings.maxPositions=parseInt(document.getElementById('max-positions').value)||3;
   settings.schedule=document.getElementById('scan-schedule').value;
