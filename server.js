@@ -110,18 +110,68 @@ function buildSymbol(ticker, type, strike) {
   return { symbol: symbol, expiry: exp.formatted, strike: s };
 }
 
+// Calculate real 14-period RSI from an array of closing prices
+function calcRSI(closes) {
+  if (!closes || closes.length < 15) return 50;
+  var gains = 0, losses = 0;
+  for (var i = closes.length - 14; i < closes.length; i++) {
+    var diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff; else losses += Math.abs(diff);
+  }
+  var ag = gains / 14, al = losses / 14;
+  if (al === 0) return 100;
+  return Math.round(100 - (100 / (1 + ag / al)));
+}
+
+// Calculate VWAP from parallel arrays of closes and volumes
+function calcVWAP(closes, highs, lows, volumes) {
+  var sp = 0, sv = 0;
+  for (var i = 0; i < closes.length; i++) {
+    if (closes[i] && volumes[i]) {
+      var tp = (closes[i] + (highs[i] || closes[i]) + (lows[i] || closes[i])) / 3;
+      sp += tp * volumes[i];
+      sv += volumes[i];
+    }
+  }
+  return sv > 0 ? (sp / sv) : closes[closes.length - 1];
+}
+
+// Count consecutive bullish or bearish 5-min candles from the end
+function countConsecutive(opens, closes, direction) {
+  var count = 0;
+  for (var i = closes.length - 1; i >= Math.max(0, closes.length - 6); i--) {
+    if (direction === 'bull' && closes[i] > opens[i]) count++;
+    else if (direction === 'bear' && closes[i] < opens[i]) count++;
+    else break;
+  }
+  return count;
+}
+
 // Fetch market data
 async function fetchQuote(ticker) {
-  // Use Tradier quotes API — real-time, no rate limits, already authenticated
+  // Use Tradier quotes API + 5-min candles for real RSI/VWAP
   var session = await getState('session', null);
   if (session && session.token) {
     try {
       var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
-      var r = await fetch(base + '/markets/quotes?symbols=' + ticker + '&greeks=false', {
-        headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
-      });
-      var data = await r.json();
-      var q = data && data.quotes && data.quotes.quote;
+
+      // Fetch real-time quote and 5-min candles in parallel
+      var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      var dateStr = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
+
+      var [quoteRes, candleRes] = await Promise.all([
+        fetch(base + '/markets/quotes?symbols=' + ticker + '&greeks=false', {
+          headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+        }),
+        fetch(base + '/markets/timesales?symbol=' + ticker + '&interval=5min&start=' + dateStr + '%2009:30&session_filter=open', {
+          headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+        })
+      ]);
+
+      var quoteData = await quoteRes.json();
+      var candleData = await candleRes.json();
+      var q = quoteData && quoteData.quotes && quoteData.quotes.quote;
+
       if (q && q.last && parseFloat(q.last) > 0) {
         var price = parseFloat(q.last);
         var prev = parseFloat(q.prevclose) || price;
@@ -131,23 +181,42 @@ async function fetchQuote(ticker) {
         var vol = parseInt(q.volume) || 0;
         var avgVol = parseInt(q.average_volume) || vol || 1;
         var volRatio = vol / avgVol;
-        var vwap = ((high + low + price) / 3).toFixed(2);
         var spread = (q.ask && q.bid) ? (((parseFloat(q.ask) - parseFloat(q.bid)) / price) * 100).toFixed(3) : (((high-low)/price)*100).toFixed(3);
-        // RSI approximation from price change
-        var rsi = chgPct > 3 ? 68 : chgPct > 1 ? 58 : chgPct > 0 ? 52 : chgPct > -1 ? 46 : chgPct > -3 ? 38 : 30;
-        var bull = chgPct > 0.5 ? 2 : chgPct > 0 ? 1 : 0;
-        var bear = chgPct < -0.5 ? 2 : chgPct < 0 ? 1 : 0;
-        var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-        var etD = new Date(etNow);
-        var mid = (etD.getHours() - 9) * 60 + etD.getMinutes() - 30;
+        var mid = (etNow.getHours() - 9) * 60 + etNow.getMinutes() - 30;
         var isOpen = q.tradeable === true || (mid >= 0 && mid <= 390);
-        console.log('Tradier ' + ticker + ' $' + price + ' ' + chgPct.toFixed(2) + '% spread:' + spread + '%');
+
+        // Parse 5-min candles for real RSI, VWAP, consecutive candles
+        var rsi = 50, vwap = ((high + low + price) / 3).toFixed(2);
+        var bull = 0, bear = 0;
+        try {
+          var series = candleData && candleData.series && candleData.series.data;
+          if (series) {
+            var candles = Array.isArray(series) ? series : [series];
+            var closes = candles.map(function(c) { return parseFloat(c.close); }).filter(function(v) { return !isNaN(v); });
+            var opens  = candles.map(function(c) { return parseFloat(c.open);  }).filter(function(v) { return !isNaN(v); });
+            var highs  = candles.map(function(c) { return parseFloat(c.high);  }).filter(function(v) { return !isNaN(v); });
+            var lows   = candles.map(function(c) { return parseFloat(c.low);   }).filter(function(v) { return !isNaN(v); });
+            var vols   = candles.map(function(c) { return parseFloat(c.volume);}).filter(function(v) { return !isNaN(v); });
+
+            if (closes.length >= 15) rsi = calcRSI(closes);
+            if (closes.length > 0)   vwap = calcVWAP(closes, highs, lows, vols).toFixed(2);
+            bull = countConsecutive(opens, closes, 'bull');
+            bear = countConsecutive(opens, closes, 'bear');
+            console.log('5-min candles: ' + candles.length + ' RSI:' + rsi + ' VWAP:' + vwap + ' bull:' + bull + ' bear:' + bear);
+          } else {
+            // Not enough candles yet (early in day) — fall back to day-change estimate
+            rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 52 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+            console.log('No 5-min candles yet for ' + ticker + ' — using fallback RSI:' + rsi);
+          }
+        } catch(ce) { console.error('candle parse error ' + ticker + ': ' + ce.message); }
+
+        console.log('Tradier ' + ticker + ' $' + price + ' ' + chgPct.toFixed(2) + '% RSI:' + rsi + ' spread:' + spread + '%');
         return {
           ticker: ticker, price: price.toFixed(2), changePct: chgPct.toFixed(2),
           volume: vol, volumeRatio: volRatio.toFixed(2), barVolumeRatio: volRatio.toFixed(2),
           rsi: rsi.toString(), ma9: price.toFixed(2), vwap: vwap,
           spreadEstPct: spread,
-          last3Candles: [{ open: prev.toFixed(2), close: price.toFixed(2), bullish: price > prev, vol: vol }],
+          last3Candles: [],
           consecutiveBull: bull, consecutiveBear: bear,
           intradayHigh: high.toFixed(2), intradayLow: low.toFixed(2),
           bid: q.bid, ask: q.ask,
@@ -223,7 +292,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan
 var CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-var SCAN_SYSTEM = 'You are an options trading bot. Given real-time stock data, find a tradeable setup. BUY_CALL if price is up and RSI under 70. BUY_PUT if price is down and RSI above 30. Only NONE if market is closed. Confidence must be exactly HIGH, MEDIUM, or LOW. Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price. Respond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"MEDIUM","strike":500,"premium":1.50,"reason":"brief"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, and candle momentum to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 45-65, price above VWAP, 2+ consecutive bull candles, positive day change\n- BUY_PUT: RSI 35-55, price below VWAP, 2+ consecutive bear candles, negative day change\n- HIGH confidence: all conditions clearly met\n- MEDIUM confidence: most conditions met, one borderline\n- LOW or NONE: mixed signals, RSI overbought/oversold, or no clear direction\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"MEDIUM","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 async function scanTicker(ticker, settings) {
   var d = await fetchQuote(ticker);
@@ -238,7 +307,17 @@ async function scanTicker(ticker, settings) {
   await addLog('entry', 'scanning ' + ticker + ' $' + d.price + ' (' + d.changePct + '%) RSI:' + d.rsi + ' src:' + d.source);
 
   try {
-    var userMsg = 'Stock: ' + ticker + ' | Price: $' + d.price + ' | Change: ' + d.changePct + '% today | RSI: ' + d.rsi + ' | VWAP: $' + d.vwap + ' | High: $' + d.intradayHigh + ' | Low: $' + d.intradayLow + ' | Bull candles: ' + d.consecutiveBull + ' | Bear candles: ' + d.consecutiveBear + '\n\nProfit target: $' + settings.profitTarget + ' | Stop: $' + settings.stopLoss + '\n\nRespond ONLY with a <SCAN_RESULT> block. No expiry field needed.';
+    var priceVsVwap = parseFloat(d.price) > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
+    var userMsg = 'Ticker: ' + ticker +
+      '\nPrice: $' + d.price + ' | Change: ' + d.changePct + '% today' +
+      '\nRSI (14-period, 5-min): ' + d.rsi +
+      '\nVWAP: $' + d.vwap + ' | Price is ' + priceVsVwap + ' VWAP' +
+      '\nIntraday High: $' + d.intradayHigh + ' | Low: $' + d.intradayLow +
+      '\nConsecutive bull candles: ' + d.consecutiveBull + ' | bear candles: ' + d.consecutiveBear +
+      '\nVolume ratio vs avg: ' + d.volumeRatio + 'x' +
+      '\nBid: $' + (d.bid||'?') + ' | Ask: $' + (d.ask||'?') + ' | Spread: ' + d.spreadEstPct + '%' +
+      '\nProfit target: $' + settings.profitTarget + '/contract | Stop-loss: $' + settings.stopLoss + '/contract' +
+      '\n\nRespond ONLY with a <SCAN_RESULT> block.';
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) { await addLog('stop', 'No ANTHROPIC_API_KEY'); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no api key' }; }
     var r = await fetch('https://api.anthropic.com/v1/messages', {
