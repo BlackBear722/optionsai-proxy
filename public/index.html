@@ -261,10 +261,6 @@
         <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-max" value="500" min="10" onchange="updateSettings()"></div>
       </div>
       <div class="setting-row">
-        <span>Daily profit target 🎯</span>
-        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-profit-target" value="500" min="10" onchange="updateSettings()"></div>
-      </div>
-      <div class="setting-row">
         <span>Contracts per trade</span>
         <input type="number" class="setting-input" id="contracts-per-trade" value="1" min="1" max="10" onchange="updateSettings()">
       </div>
@@ -300,19 +296,6 @@
       <div class="ai-card-title">🛡️ DAILY LOSS GUARD</div>
       <div class="daily-bar"><div class="daily-marker" id="daily-marker" style="left:0%"></div></div>
       <div style="display:flex;justify-content:space-between;font-size:10px;color:#3a6a9c"><span>$0</span><span id="daily-max-label">$500 limit</span></div>
-    </div>
-
-    <!-- Daily profit target bar -->
-    <div class="ai-card">
-      <div class="ai-card-title">🎯 DAILY PROFIT TARGET</div>
-      <div style="height:6px;border-radius:3px;background:#1a3050;margin:8px 0;overflow:hidden">
-        <div id="profit-target-bar" style="height:100%;border-radius:3px;background:linear-gradient(90deg,#00aaff,#00ff88);width:0%;transition:width .5s"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:#3a6a9c">
-        <span id="profit-target-current">$0.00 earned</span>
-        <span id="profit-target-goal">$500 goal</span>
-      </div>
-      <div style="font-size:11px;color:#3a6a9c;margin-top:6px;text-align:center" id="profit-target-msg">Bot stops automatically when target is reached</div>
     </div>
 
     <!-- Scan log -->
@@ -870,9 +853,6 @@ async function loadServerState(){
       document.getElementById('contracts-per-trade').value=settings.contracts||1;
       document.getElementById('max-positions').value=settings.maxPositions||3;
       document.getElementById('scan-schedule').value=settings.schedule||'5min';
-      if(settings.dailyProfitTarget&&document.getElementById('daily-profit-target')){
-        document.getElementById('daily-profit-target').value=settings.dailyProfitTarget;
-      }
     }
     if(state.watchlist){watchlist=state.watchlist;renderWatchlist();}
     document.getElementById('engine-toggle').className='toggle-track'+(engineOn?' on':'');
@@ -888,36 +868,31 @@ async function loadServerState(){
 
 async function refreshLiveStats(){
   try{
-    const [logsRes, stateRes] = await Promise.all([
-      fetch('/api/logs'),
+    const [journalRes, stateRes] = await Promise.all([
+      fetch('/api/journal'),
       fetch('/api/state')
     ]);
-    const logs = await logsRes.json();
+    const j = await journalRes.json();
     const state = await stateRes.json();
 
-    // Today's date in local time
+    // Pull today's stats from the trades DB via journal dailyStats
     const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const todayRow = (j.dailyStats || []).find(d => d.date === today) || {};
+    const profit  = parseFloat(todayRow.pnl || 0) > 0 ? parseFloat(todayRow.pnl) : 0;
+    const loss    = parseFloat(todayRow.pnl || 0) < 0 ? Math.abs(parseFloat(todayRow.pnl)) : 0;
+    const wins    = todayRow.wins   || 0;
+    const losses  = todayRow.losses || 0;
+    const trades  = todayRow.trades || 0;
+    const net     = parseFloat(todayRow.pnl || 0);
+    const winRate = trades > 0 ? Math.round(wins / trades * 100) : null;
 
-    // Parse wins and losses from logs
-    let profit=0, loss=0, wins=0, losses=0;
-    logs.forEach(function(l){
-      if(!l.ts) return;
-      const logDate = new Date(l.ts).toLocaleDateString('en-CA');
-      if(logDate !== today) return;
-      if(l.message && l.message.includes('PROFIT TARGET')){
-        const m = l.message.match(/\+\$(\d+\.\d+)/);
-        if(m){ profit += parseFloat(m[1]); wins++; }
-      }
-      if(l.message && l.message.includes('STOP LOSS')){
-        const m = l.message.match(/-\$(\d+\.\d+)/);
-        if(m){ loss += parseFloat(m[1]); losses++; }
-      }
-    });
-
-    const trades = wins + losses;
-    const net = profit - loss;
-    const winRate = trades > 0 ? Math.round(wins/trades*100) : null;
-    const openPL = parseFloat(balances?.open_pl || 0);
+    // Open P&L: sum live positions from Tradier positions data
+    let openPL = 0;
+    if(positions && positions.length){
+      positions.forEach(p => {
+        if(p.cost_basis && p.market_value) openPL += (p.market_value - p.cost_basis);
+      });
+    }
 
     // Update displays
     document.getElementById('daily-profit-display').textContent = '$' + profit.toFixed(2);
@@ -927,7 +902,7 @@ async function refreshLiveStats(){
 
     const netEl = document.getElementById('daily-net-display');
     if(netEl){
-      netEl.textContent = (net >= 0 ? '+' : '') + '$' + net.toFixed(2);
+      netEl.textContent = (net >= 0 ? '+' : '') + '$' + Math.abs(net).toFixed(2);
       netEl.style.color = net > 0 ? '#00ff88' : net < 0 ? '#ff4466' : '#e0f0ff';
     }
     document.getElementById('trades-today-display').textContent = trades;
@@ -939,31 +914,9 @@ async function refreshLiveStats(){
       plEl.textContent = (openPL >= 0 ? '+' : '') + '$' + openPL.toFixed(2);
       plEl.style.color = openPL > 0 ? '#00ff88' : openPL < 0 ? '#ff4466' : '#e0f0ff';
     }
-    // Update profit target bar
-    const dpGoal = settings.dailyProfitTarget || 500;
-    const dpPct2 = Math.min(100, (profit / dpGoal * 100));
-    const ptBar = document.getElementById('profit-target-bar');
-    const ptCur = document.getElementById('profit-target-current');
-    const ptGoal = document.getElementById('profit-target-goal');
-    const ptMsg = document.getElementById('profit-target-msg');
-    if(ptBar) ptBar.style.width = dpPct2 + '%';
-    if(ptCur) ptCur.textContent = '$' + profit.toFixed(2) + ' earned';
-    if(ptGoal) ptGoal.textContent = '$' + dpGoal + ' goal';
-    if(ptMsg){
-      if(profit >= dpGoal){
-        ptMsg.textContent = '🎉 TARGET REACHED — Engine stopped for the day!';
-        ptMsg.style.color = '#00ff88';
-      } else {
-        ptMsg.textContent = '$' + (dpGoal-profit).toFixed(2) + ' remaining · Bot stops automatically at goal';
-        ptMsg.style.color = '#3a6a9c';
-      }
-    }
 
-    // Show daily profit target progress
-    const dpTarget = settings.dailyProfitTarget || 500;
-    const dpPct = Math.min(100, (profit / dpTarget * 100)).toFixed(0);
     const upd = document.getElementById('stats-updated');
-    if(upd) upd.textContent = 'Live · updated ' + new Date().toLocaleTimeString() + ' · Profit target: $' + profit.toFixed(2) + '/$' + dpTarget + ' (' + dpPct + '%)';
+    if(upd) upd.textContent = 'Live · updated ' + new Date().toLocaleTimeString();
 
   } catch(e){ console.error('refreshLiveStats:', e); }
 }
@@ -1008,36 +961,27 @@ let journalRefreshTimer = null;
 
 async function loadJournal(){
   try{
-    const [jRes, logsRes] = await Promise.all([
-      fetch('/api/journal'),
-      fetch('/api/logs')
+    const [jRes] = await Promise.all([
+      fetch('/api/journal')
     ]);
     const j=await jRes.json();
-    const logs=await logsRes.json();
 
-    // Calculate today's stats from logs
-    const today=new Date().toISOString().slice(0,10);
-    const todayLogs=logs.filter(l=>l.ts&&l.ts.slice(0,10)===today);
-    const todayWins=todayLogs.filter(l=>l.message&&l.message.includes('PROFIT TARGET')).length;
-    const todayLosses=todayLogs.filter(l=>l.message&&l.message.includes('STOP LOSS')).length;
-    const todayTrades=todayWins+todayLosses;
-    // Extract P&L from log messages
-    let todayProfit=0, todayLoss=0;
-    todayLogs.forEach(l=>{
-      if(l.message&&l.message.includes('PROFIT TARGET')){
-        const m=l.message.match(/\+\$(\d+\.\d+)/);
-        if(m)todayProfit+=parseFloat(m[1]);
-      }
-      if(l.message&&l.message.includes('STOP LOSS')){
-        const m=l.message.match(/-\$(\d+\.\d+)/);
-        if(m)todayLoss+=parseFloat(m[1]);
-      }
-    });
-    const todayNet=todayProfit-todayLoss;
+    // Calculate today's stats from trades DB (via dailyStats)
+    const today=new Date().toLocaleDateString('en-CA');
+    const todayRow=(j.dailyStats||[]).find(d=>d.date===today)||{};
+    const todayWins=todayRow.wins||0;
+    const todayLosses=todayRow.losses||0;
+    const todayTrades=todayRow.trades||0;
+    const todayProfit=parseFloat(todayRow.pnl||0)>0?parseFloat(todayRow.pnl):0;
+    const todayLoss=parseFloat(todayRow.pnl||0)<0?Math.abs(parseFloat(todayRow.pnl)):0;
+    const todayNet=parseFloat(todayRow.pnl||0);
     const todayWinRate=todayTrades>0?Math.round(todayWins/todayTrades*100):0;
 
-    // Open positions P&L from dashboard
-    const openPL=balances?.open_pl||0;
+    // Open P&L: sum from live positions data
+    let openPL=0;
+    if(positions&&positions.length){
+      positions.forEach(p=>{if(p.cost_basis&&p.market_value)openPL+=(p.market_value-p.cost_basis);});
+    }
 
     // Today's live stats
     const todayStats=[
@@ -1046,7 +990,7 @@ async function loadJournal(){
       {label:'TRADES TODAY',val:todayTrades,color:'#e0f0ff'},
       {label:'WIN RATE TODAY',val:todayTrades>0?todayWinRate+'%':'—',color:todayWinRate>=50?'#00ff88':'#ff4466'},
       {label:"TODAY'S NET",val:(todayNet>=0?'+':'')+('$'+Math.abs(todayNet).toFixed(2)),color:todayNet>=0?'#00ff88':'#ff4466'},
-      {label:'OPEN P&L',val:(parseFloat(openPL)>=0?'+':'')+('$'+parseFloat(openPL||0).toFixed(2)),color:parseFloat(openPL)>=0?'#00ff88':'#ff4466'},
+      {label:'OPEN P&L',val:(openPL>=0?'+':'')+('$'+Math.abs(openPL).toFixed(2)),color:openPL>0?'#00ff88':openPL<0?'#ff4466':'#e0f0ff'},
     ];
     document.getElementById('journal-today').innerHTML=todayStats.map(s=>`
       <div style="background:#051520;border:1px solid #00d4ff22;border-radius:8px;padding:10px 12px">
@@ -1124,7 +1068,6 @@ function updateSettings(){
   settings.profitTarget=parseFloat(document.getElementById('profit-target').value)||1.00;
   settings.stopLoss=parseFloat(document.getElementById('stop-loss-dollar').value)||0.10;
   settings.dailyMax=parseFloat(document.getElementById('daily-max').value)||500;
-  settings.dailyProfitTarget=parseFloat(document.getElementById('daily-profit-target').value)||500;
   settings.contracts=parseInt(document.getElementById('contracts-per-trade').value)||1;
   settings.maxPositions=parseInt(document.getElementById('max-positions').value)||3;
   settings.schedule=document.getElementById('scan-schedule').value;
