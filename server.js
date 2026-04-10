@@ -50,43 +50,49 @@ async function addTrade(t) {
   } catch(e) { console.error('addTrade:', e.message); }
 }
 
-// Get next monthly expiry (third Friday of current or next month)
-function getNextExpiry() {
+// Get next weekly expiry (nearest Friday at least 1 day away)
+// SPY/QQQ/IWM have daily 0DTE options — all others use nearest weekly Friday
+function getNextExpiry(ticker) {
   var now = new Date();
   var et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  
-  function thirdFriday(year, month) {
-    var d = new Date(year, month, 1);
-    var count = 0;
-    while (true) {
-      if (d.getDay() === 5) {
-        count++;
-        if (count === 3) return new Date(d);
+  var etHour = et.getHours();
+
+  // For 0DTE tickers: use today if before 3:30pm ET, otherwise next trading day
+  var zeroTickers = ['SPY', 'QQQ', 'IWM'];
+  var t = (ticker || '').toUpperCase().trim();
+  if (zeroTickers.indexOf(t) >= 0) {
+    // After 3:30pm ET, today's 0DTE is too close — use next Friday
+    if (etHour < 15 || (etHour === 15 && et.getMinutes() < 30)) {
+      // Use today only if it's a weekday (Mon-Fri)
+      if (et.getDay() >= 1 && et.getDay() <= 5) {
+        var yy0 = String(et.getFullYear()).slice(2);
+        var mm0 = ('0' + (et.getMonth() + 1)).slice(-2);
+        var dd0 = ('0' + et.getDate()).slice(-2);
+        var fmt0 = et.getFullYear() + '-' + mm0 + '-' + dd0;
+        console.log('0DTE expiry for ' + t + ': ' + fmt0);
+        return { formatted: fmt0, yy: yy0, mm: mm0, dd: dd0 };
       }
-      d.setDate(d.getDate() + 1);
     }
   }
 
-  var tf = thirdFriday(et.getFullYear(), et.getMonth());
-  var daysAway = Math.floor((tf - et) / 86400000);
-  if (daysAway < 3) {
-    var nextMonth = et.getMonth() + 1;
-    var nextYear = et.getFullYear();
-    if (nextMonth > 11) { nextMonth = 0; nextYear++; }
-    tf = thirdFriday(nextYear, nextMonth);
+  // Find nearest Friday at least 1 day away
+  var candidate = new Date(et);
+  candidate.setDate(candidate.getDate() + 1); // start from tomorrow
+  while (candidate.getDay() !== 5) {
+    candidate.setDate(candidate.getDate() + 1);
   }
 
-  var yy = String(tf.getFullYear()).slice(2);
-  var mm = ('0' + (tf.getMonth() + 1)).slice(-2);
-  var dd = ('0' + tf.getDate()).slice(-2);
-  var formatted = tf.getFullYear() + '-' + mm + '-' + dd;
-  console.log('Expiry: ' + formatted);
+  var yy = String(candidate.getFullYear()).slice(2);
+  var mm = ('0' + (candidate.getMonth() + 1)).slice(-2);
+  var dd = ('0' + candidate.getDate()).slice(-2);
+  var formatted = candidate.getFullYear() + '-' + mm + '-' + dd;
+  console.log('Weekly expiry for ' + (t || 'unknown') + ': ' + formatted);
   return { formatted: formatted, yy: yy, mm: mm, dd: dd };
 }
 
 // Build OCC option symbol
 function buildSymbol(ticker, type, strike) {
-  var exp = getNextExpiry();
+  var exp = getNextExpiry(ticker);
   var t = ticker.toUpperCase().trim();
   // Tradier does NOT want space padding — just ticker + date + type + strike
   var ticker6 = t;  // no padding
@@ -298,7 +304,7 @@ async function getValidStrike(ticker, expiry, type, targetStrike, session) {
 }
 
 async function getValidExpiry(ticker, session) {
-  // Get available expiration dates from Tradier
+  // Get available expiration dates from Tradier and pick best weekly/0DTE expiry
   try {
     var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
     var url = base + '/markets/options/expirations?symbol=' + ticker + '&includeAllRoots=true';
@@ -307,13 +313,33 @@ async function getValidExpiry(ticker, session) {
     var dates = data && data.expirations && data.expirations.date;
     if (!dates) return null;
     var arr = Array.isArray(dates) ? dates : [dates];
-    // Find next expiry at least 2 days from now
-    var now = new Date();
-    var cutoff = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
-    var valid = arr.filter(function(d) { return new Date(d) >= cutoff; });
-    if (!valid.length) return null;
-    console.log('Valid expiries for ' + ticker + ':', valid.slice(0, 3));
-    return valid[0]; // nearest valid expiry
+
+    var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    var today = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
+    var etHour = etNow.getHours();
+    var etMin = etNow.getMinutes();
+
+    // 0DTE tickers: use today if before 3:30pm ET on a weekday
+    var zeroTickers = ['SPY', 'QQQ', 'IWM'];
+    var t = ticker.toUpperCase().trim();
+    if (zeroTickers.indexOf(t) >= 0 && etNow.getDay() >= 1 && etNow.getDay() <= 5) {
+      var todayOk = (etHour < 15 || (etHour === 15 && etMin < 30));
+      if (todayOk && arr.indexOf(today) >= 0) {
+        console.log('0DTE expiry confirmed for ' + t + ': ' + today);
+        return today;
+      }
+    }
+
+    // All others: nearest Friday (weekly) at least 1 day away
+    var tomorrow = new Date(etNow);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    var future = arr.filter(function(d) { return new Date(d + 'T12:00:00Z') >= tomorrow; });
+    if (!future.length) return null;
+    var fridays = future.filter(function(d) { return new Date(d + 'T12:00:00Z').getUTCDay() === 5; });
+    var chosen = fridays.length ? fridays[0] : future[0];
+    console.log('Weekly expiry chosen for ' + ticker + ': ' + chosen);
+    return chosen;
   } catch(e) {
     console.error('getValidExpiry error:', e.message);
     return null;
@@ -374,32 +400,16 @@ var engineTimer = null, monitorTimer = null;
 async function runEngine() {
   var engineOn = await getState('engineOn', false);
   if (!engineOn) return;
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
   var session = await getState('session', null);
-  var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
+  var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
   var dailyLoss = await getState('dailyLoss', 0);
   var killSwitch = await getState('killSwitch', false);
   if (!session) { await addLog('skip', 'no session'); return; }
   if (killSwitch) { await addLog('stop', 'kill switch on'); return; }
-  if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily loss limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
-  var dailyProfit = await getState('dailyProfit', 0);
-  if (settings.dailyProfitTarget && dailyProfit >= settings.dailyProfitTarget) {
-    await addLog('trade', '🎯 DAILY PROFIT TARGET HIT $' + dailyProfit.toFixed(2) + ' — stopping engine for the day!');
-    await setState('engineOn', false);
-    clearInterval(engineTimer); clearInterval(monitorTimer);
-    return;
-  }
+  if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
   var positions = [];
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
-  // Only scan during market hours (9:30am - 4:00pm ET)
-  var etNow2 = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-  var etDate2 = new Date(etNow2);
-  var mid2 = (etDate2.getHours() - 9) * 60 + etDate2.getMinutes() - 30;
-  if (mid2 < 0 || mid2 > 390) {
-    await addLog('skip', 'market closed — engine paused until 9:30am ET');
-    return;
-  }
-
   await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
   if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions reached (' + positions.length + '/' + settings.maxPositions + ') — not buying'); return; }
   await addLog('entry', 'scanning ' + watchlist.length + ' tickers: ' + watchlist.join(', '));
@@ -437,15 +447,6 @@ async function runMonitor() {
   var session = await getState('session', null);
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25 });
   if (!engineOn || killSwitch || !session) return;
-
-  // Only monitor during market hours (9:30am - 4:00pm ET)
-  var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-  var etDate = new Date(etNow);
-  var minutesIntoDay = (etDate.getHours() - 9) * 60 + etDate.getMinutes() - 30;
-  if (minutesIntoDay < 0 || minutesIntoDay > 390) {
-    console.log('Market closed — skipping monitor check');
-    return;
-  }
   try {
     var positions = await getPositions(session);
     var dailyLoss = await getState('dailyLoss', 0);
@@ -476,23 +477,6 @@ async function runMonitor() {
         var totalPnl = pnlPer * Math.abs(pos.quantity||1);
         await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
         await closePos(pos, session);
-        // Track daily profit
-        var dp = await getState('dailyProfit', 0);
-        dp += totalPnl;
-        await setState('dailyProfit', dp);
-        await addLog('trade', 'Daily profit: $' + dp.toFixed(2) + ' / $' + (settings.dailyProfitTarget||500));
-        // Check if daily profit target hit — close all positions and stop
-        if (settings.dailyProfitTarget && dp >= settings.dailyProfitTarget) {
-          await addLog('trade', '🎯 DAILY PROFIT TARGET $' + settings.dailyProfitTarget + ' REACHED! Closing all positions and stopping.');
-          // Close all remaining positions
-          var allPos = await getPositions(session);
-          for (var cp = 0; cp < allPos.length; cp++) {
-            try { await closePos(allPos[cp], session); await addLog('trade', 'Closed: ' + allPos[cp].symbol); } catch(e) {}
-          }
-          await setState('engineOn', false);
-          clearInterval(engineTimer); clearInterval(monitorTimer);
-          return;
-        }
         // Record win in trades table
         try {
           var winTicker = pos.symbol.slice(0,4).trim();
@@ -584,13 +568,12 @@ app.post('/api/killswitch', async function(req, res) {
 
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
-  var watchlist = await getState('watchlist', ['AAPL', 'MSFT', 'NVDA', 'META', 'QQQ']);
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, maxPositions: 2, contracts: 1, schedule: '1min' });
+  var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
   var session = await getState('session', null);
-  var dailyProfit2 = await getState('dailyProfit', 0);
-  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit2, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
+  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
 });
 
 app.get('/api/logs', async function(req, res) {
@@ -670,8 +653,7 @@ function scheduleMidnightReset() {
   et.setHours(24, 0, 0, 0);
   setTimeout(async function() {
     await setState('dailyLoss', 0);
-    await setState('dailyProfit', 0);
-    console.log('daily reset — loss and profit counters cleared');
+    console.log('daily reset');
     scheduleMidnightReset();
   }, et - now);
 }
