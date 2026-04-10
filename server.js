@@ -543,19 +543,30 @@ async function runMonitor() {
   var engineOn = await getState('engineOn', false);
   var killSwitch = await getState('killSwitch', false);
   var session = await getState('session', null);
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25 });
+  var settings = await getState('settings', {
+    profitTarget: 0.50, stopLoss: 0.25,
+    trailActivate: 0.15, trailAmount: 0.10,
+    maxHoldMinutes: 20
+  });
   if (!engineOn || killSwitch || !session) return;
+
+  // Load trailing stop high-water marks: { symbol: highWaterMark }
+  var trailMarks = await getState('trailMarks', {});
+
   try {
     var positions = await getPositions(session);
     var dailyLoss = await getState('dailyLoss', 0);
+
     for (var i = 0; i < positions.length; i++) {
       var pos = positions[i];
       if (!pos.cost_basis) continue;
-      // Fetch live option price from Tradier instead of relying on stale market_value
+      var sym = (pos.symbol || '').trim();
+
+      // ── Live price ──────────────────────────────────────────────────────────
       var currentPrice = null;
       try {
         var base2 = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
-        var qr = await fetch(base2 + '/markets/quotes?symbols=' + pos.symbol + '&greeks=false', {
+        var qr = await fetch(base2 + '/markets/quotes?symbols=' + sym + '&greeks=false', {
           headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
         });
         var qdata = await qr.json();
@@ -566,39 +577,95 @@ async function runMonitor() {
           currentPrice = (parseFloat(quote.bid) + parseFloat(quote.ask)) / 2;
         }
       } catch(qe) { console.error('quote fetch error:', qe.message); }
-      // Fall back to market_value if quote unavailable
+
       var entryPricePerContract = pos.cost_basis / Math.abs(pos.quantity || 1) / 100;
       var livePricePerContract = currentPrice || (pos.market_value ? pos.market_value / Math.abs(pos.quantity || 1) / 100 : entryPricePerContract);
       var pnlPer = livePricePerContract - entryPricePerContract;
-      await addLog('entry', 'monitor ' + pos.symbol + ' entry:$' + entryPricePerContract.toFixed(2) + ' live:$' + livePricePerContract.toFixed(2) + ' pnl:$' + pnlPer.toFixed(2));
+
+      // ── How long has this position been open? ───────────────────────────────
+      var heldMinutes = 9999;
+      try {
+        var ticker4 = sym.slice(0, 4).trim();
+        var tRow = await pool.query("SELECT ts FROM trades WHERE result='open' AND ticker=$1 ORDER BY ts DESC LIMIT 1", [ticker4]);
+        if (tRow.rows.length) {
+          heldMinutes = (Date.now() - new Date(tRow.rows[0].ts).getTime()) / 60000;
+        }
+      } catch(te) { console.error('held time error:', te.message); }
+
+      // ── Trailing stop logic ─────────────────────────────────────────────────
+      var trailActivate = parseFloat(settings.trailActivate) || 0.15;
+      var trailAmount   = parseFloat(settings.trailAmount)   || 0.10;
+      var maxHold       = parseFloat(settings.maxHoldMinutes) || 20;
+
+      if (pnlPer >= trailActivate) {
+        // Update high-water mark
+        if (!trailMarks[sym] || livePricePerContract > trailMarks[sym]) {
+          trailMarks[sym] = livePricePerContract;
+          await setState('trailMarks', trailMarks);
+        }
+      }
+
+      var trailStop = trailMarks[sym] ? trailMarks[sym] - trailAmount : null;
+      var trailingTriggered = trailStop !== null && livePricePerContract <= trailStop;
+
+      await addLog('entry',
+        'monitor ' + sym +
+        ' entry:$' + entryPricePerContract.toFixed(2) +
+        ' live:$' + livePricePerContract.toFixed(2) +
+        ' pnl:$' + pnlPer.toFixed(2) +
+        (trailMarks[sym] ? ' peak:$' + trailMarks[sym].toFixed(2) : '') +
+        ' held:' + Math.round(heldMinutes) + 'min'
+      );
+
+      // ── Close helpers ───────────────────────────────────────────────────────
+      async function closeTrade(reason, pnlLabel, isWin) {
+        var totalPnl = pnlPer * Math.abs(pos.quantity || 1);
+        await addLog(isWin ? 'trade' : 'stop', reason + ': ' + sym + ' ' + pnlLabel + '$' + Math.abs(totalPnl).toFixed(2));
+        await closePos(pos, session);
+        // Clear trail mark for this symbol
+        delete trailMarks[sym];
+        await setState('trailMarks', trailMarks);
+        if (isWin) {
+          var dp = await getState('dailyProfit', 0);
+          dp += totalPnl;
+          await setState('dailyProfit', dp);
+          try {
+            var wt = sym.slice(0, 4).trim();
+            await pool.query("UPDATE trades SET result='win', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)", [totalPnl.toFixed(2), wt, wt]);
+            await addLog('trade', 'Journal: WIN +$' + totalPnl.toFixed(2) + ' on ' + wt + ' | Daily profit: $' + dp.toFixed(2));
+          } catch(e) { console.error('win record error:', e.message); }
+        } else {
+          var loss = Math.abs(totalPnl);
+          dailyLoss += loss;
+          await setState('dailyLoss', dailyLoss);
+          try {
+            var lt = sym.slice(0, 4).trim();
+            await pool.query("UPDATE trades SET result='loss', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)", [totalPnl.toFixed(2), lt, lt]);
+            await addLog('stop', 'Journal: LOSS -$' + loss.toFixed(2) + ' on ' + lt);
+          } catch(e) { console.error('loss record error:', e.message); }
+        }
+        setTimeout(runEngine, 3000);
+      }
+
+      // ── Exit decisions (in priority order) ─────────────────────────────────
+
+      // 1. Hard profit target hit
       if (pnlPer >= settings.profitTarget) {
-        var totalPnl = pnlPer * Math.abs(pos.quantity||1);
-        await addLog('trade', 'PROFIT TARGET: ' + pos.symbol + ' +$' + totalPnl.toFixed(2));
-        await closePos(pos, session);
-        // Track daily profit
-        var dailyProfit = await getState('dailyProfit', 0);
-        dailyProfit += totalPnl;
-        await setState('dailyProfit', dailyProfit);
-        // Record win in trades table
-        try {
-          var winTicker = pos.symbol.slice(0,4).trim();
-          await pool.query("UPDATE trades SET result='win', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)",[totalPnl.toFixed(2), winTicker, winTicker]);
-          await addLog('trade', 'Journal updated: WIN +$' + totalPnl.toFixed(2) + ' on ' + winTicker + ' | Daily profit: $' + dailyProfit.toFixed(2));
-        } catch(e){ console.error('win record error:', e.message); }
-        setTimeout(runEngine, 3000);
+        await closeTrade('PROFIT TARGET', '+', true);
+
+      // 2. Trailing stop triggered (locked in some profit)
+      } else if (trailingTriggered) {
+        var isProfit = pnlPer > 0;
+        await closeTrade('TRAILING STOP', pnlPer >= 0 ? '+' : '-', isProfit);
+
+      // 3. Hard stop loss
       } else if (pnlPer <= -settings.stopLoss) {
-        var totalLoss = pnlPer * Math.abs(pos.quantity||1);
-        await addLog('stop', 'STOP LOSS: ' + pos.symbol + ' -$' + Math.abs(totalLoss).toFixed(2));
-        await closePos(pos, session);
-        dailyLoss += Math.abs(pos.market_value - pos.cost_basis);
-        await setState('dailyLoss', dailyLoss);
-        // Record loss in trades table
-        try {
-          var lossTicker = pos.symbol.slice(0,4).trim();
-          await pool.query("UPDATE trades SET result='loss', pnl=$1 WHERE result='open' AND ticker=$2 AND ts=(SELECT MAX(ts) FROM trades WHERE result='open' AND ticker=$3)",[totalLoss.toFixed(2), lossTicker, lossTicker]);
-          await addLog('stop', 'Journal updated: LOSS -$' + Math.abs(totalLoss).toFixed(2) + ' on ' + lossTicker);
-        } catch(e){ console.error('loss record error:', e.message); }
-        setTimeout(runEngine, 3000);
+        await closeTrade('STOP LOSS', '-', false);
+
+      // 4. Time-based exit — held too long
+      } else if (heldMinutes >= maxHold) {
+        var isProfit = pnlPer > 0;
+        await closeTrade('TIME EXIT (' + Math.round(heldMinutes) + 'min)', pnlPer >= 0 ? '+' : '-', isProfit);
       }
     }
   } catch(e) { console.error('monitor error:', e.message); }
