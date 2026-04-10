@@ -257,6 +257,18 @@
         <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="stop-loss-dollar" value="0.10" min="0.01" step="0.01" onchange="updateSettings()"></div>
       </div>
       <div class="setting-row">
+        <span>Trail activate at <span style="color:#00aaff;font-size:9px">LOCKS IN PROFIT</span></span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="trail-activate" value="0.15" min="0.05" step="0.05" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
+        <span>Trail by amount</span>
+        <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="trail-amount" value="0.10" min="0.05" step="0.05" onchange="updateSettings()"></div>
+      </div>
+      <div class="setting-row">
+        <span>Max hold time <span style="color:#ffaa00;font-size:9px">TIME EXIT</span></span>
+        <div style="display:flex;align-items:center;gap:4px"><input type="number" class="setting-input" id="max-hold-minutes" value="20" min="5" max="120" onchange="updateSettings()"><span style="color:#3a6a9c;font-size:10px">min</span></div>
+      </div>
+      <div class="setting-row">
         <span>Daily max loss</span>
         <div style="display:flex;align-items:center;gap:4px"><span style="color:#3a6a9c">$</span><input type="number" class="setting-input" id="daily-max" value="500" min="10" onchange="updateSettings()"></div>
       </div>
@@ -859,6 +871,9 @@ async function loadServerState(){
       settings=state.settings;
       document.getElementById('profit-target').value=settings.profitTarget||1.00;
       document.getElementById('stop-loss-dollar').value=settings.stopLoss||0.10;
+      document.getElementById('trail-activate').value=settings.trailActivate||0.15;
+      document.getElementById('trail-amount').value=settings.trailAmount||0.10;
+      document.getElementById('max-hold-minutes').value=settings.maxHoldMinutes||20;
       document.getElementById('daily-max').value=settings.dailyMax||500;
       document.getElementById('daily-profit-target').value=settings.dailyProfitTarget||200;
       document.getElementById('contracts-per-trade').value=settings.contracts||1;
@@ -1085,6 +1100,9 @@ function removeTicker(t){watchlist=watchlist.filter(x=>x!==t);renderWatchlist();
 function updateSettings(){
   settings.profitTarget=parseFloat(document.getElementById('profit-target').value)||1.00;
   settings.stopLoss=parseFloat(document.getElementById('stop-loss-dollar').value)||0.10;
+  settings.trailActivate=parseFloat(document.getElementById('trail-activate').value)||0.15;
+  settings.trailAmount=parseFloat(document.getElementById('trail-amount').value)||0.10;
+  settings.maxHoldMinutes=parseInt(document.getElementById('max-hold-minutes').value)||20;
   settings.dailyMax=parseFloat(document.getElementById('daily-max').value)||500;
   settings.dailyProfitTarget=parseFloat(document.getElementById('daily-profit-target').value)||200;
   settings.contracts=parseInt(document.getElementById('contracts-per-trade').value)||1;
