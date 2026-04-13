@@ -241,7 +241,7 @@ async function fetchQuote(ticker) {
         var avgVol = parseInt(q.average_volume) || vol || 1;
         var volRatio = vol / avgVol;
         var spread = (q.ask && q.bid) ? (((parseFloat(q.ask) - parseFloat(q.bid)) / price) * 100).toFixed(3) : (((high-low)/price)*100).toFixed(3);
-        var mid = (etNow.getHours() - 9) * 60 + etNow.getMinutes() - 30;
+        var mid = etNow.getHours() * 60 + etNow.getMinutes() - (9 * 60 + 30); // minutes since 9:30am ET
         var isWeekdayNow = etNow.getDay() >= 1 && etNow.getDay() <= 5;
         var isOpen = isWeekdayNow && mid >= 0 && mid <= 390;
 
@@ -327,7 +327,7 @@ async function fetchQuote(ticker) {
     var spread2 = (high2 && low2 && price2 && high2 > low2) ? (((high2-low2)/price2)*100).toFixed(3) : '0.20';
     var etNow2 = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
     var etD2 = new Date(etNow2);
-    var mid2 = (etD2.getHours()-9)*60+etD2.getMinutes()-30;
+    var mid2 = etD2.getHours() * 60 + etD2.getMinutes() - (9 * 60 + 30); // minutes since 9:30am ET
     var isOpen2 = etD2.getDay() >= 1 && etD2.getDay() <= 5 && mid2 >= 0 && mid2 <= 390;
     console.log('Yahoo ' + ticker + ' $' + price2 + ' ' + chgPct2.toFixed(2) + '%');
     return {
@@ -394,13 +394,7 @@ async function scanTicker(ticker, settings) {
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'low volume', d: d };
   }
 
-  // 5. First 30 minutes — too noisy, wide spreads, fake moves
-  if (mid < 30) {
-    await addLog('skip', ticker + ' first 30min (' + mid + 'min in) — skipping Claude');
-    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'opening noise', d: d };
-  }
-
-  // 6. Price barely moved since last scan — no new information for Claude
+  // 5. Price barely moved since last scan — no new information for Claude
   var lastPrice = lastScanPrice[ticker];
   var currentPrice = parseFloat(d.price);
   if (lastPrice) {
@@ -617,9 +611,10 @@ async function runEngine() {
   }
 
   // Time-of-day throttle — skip scanning during midday chop to save API credits
-  // Active windows: 9:30-11:00am ET (morning momentum) and 2:30-4:00pm ET (afternoon close)
+  // Active windows: 10:00-11:00am ET (morning momentum) and 2:30-4:00pm ET (afternoon close)
   var etNowE = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  var midE = (etNowE.getHours() - 9) * 60 + etNowE.getMinutes() - 30; // minutes since 9:30am
+  var totalMinutes = etNowE.getHours() * 60 + etNowE.getMinutes(); // minutes since midnight ET
+  var midE = totalMinutes - (9 * 60 + 30); // minutes since 9:30am ET
 
   // Market holiday / early close check
   var holidayInfo = await checkMarketHoliday();
@@ -643,11 +638,16 @@ async function runEngine() {
     return;
   }
 
-  var inMorning   = midE >= 30  && midE <= 90;   // 10:00am–11:00am (after opening noise)
+  var inMorning   = midE >= 0   && midE <= 90;   // 9:30am–11:00am
   var inAfternoon = midE >= 300 && midE <= 390;  // 2:30pm–4:00pm
-  var inOpening   = midE >= 0   && midE < 30;    // 9:30–10:00am — skip (too noisy)
   if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
-    await addLog('skip', '⏸ Midday chop (' + Math.floor(midE/60+9.5) + ':' + ('0'+(midE%60)).slice(-2) + ' ET) — pausing scan to save API credits');
+    // Convert midE back to clock time for the log message
+    var dispTotal = 570 + midE; // 570 = 9*60+30, so dispTotal = minutes since midnight
+    var dispH = Math.floor(dispTotal / 60);
+    var dispM = ('0' + (dispTotal % 60)).slice(-2);
+    var dispAmPm = dispH >= 12 ? 'PM' : 'AM';
+    var disp12 = (dispH > 12 ? dispH - 12 : dispH) + ':' + dispM + ' ' + dispAmPm;
+    await addLog('skip', '⏸ Outside active scan window (' + disp12 + ' ET) — pausing to save API credits');
     return;
   }
   var positions = [];
