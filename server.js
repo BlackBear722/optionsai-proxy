@@ -762,8 +762,32 @@ async function runEngine() {
   }
   var positions = [];
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
-  await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
-  if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions reached (' + positions.length + '/' + settings.maxPositions + ') — not buying'); return; }
+
+  // ── Fix 1: Count total contracts across all positions, not just unique symbols ──
+  var totalContracts = positions.reduce(function(sum, p) { return sum + Math.abs(p.quantity || 1); }, 0);
+  await addLog('entry', 'open positions: ' + positions.length + ' symbols, ' + totalContracts + ' total contracts (max ' + settings.maxPositions + ')');
+  if (totalContracts >= settings.maxPositions) {
+    await addLog('skip', '🚫 Max contracts reached (' + totalContracts + '/' + settings.maxPositions + ') — not buying');
+    return;
+  }
+
+  // ── Fix 2: Build set of tickers already held — never double-buy same symbol ──
+  var heldTickers = {};
+  positions.forEach(function(p) {
+    var sym = (p.symbol || '').trim();
+    var tk = sym.replace(/\d.*/, '').trim(); // strip date+strike suffix to get ticker
+    if (tk) heldTickers[tk.toUpperCase()] = true;
+  });
+  if (Object.keys(heldTickers).length > 0) {
+    await addLog('entry', 'Already holding: ' + Object.keys(heldTickers).join(', '));
+  }
+
+  // ── Fix 3: Check circuit breaker — stop if last order was rejected for buying power ──
+  var lastRejected = await getState('lastOrderRejected', false);
+  if (lastRejected) {
+    await addLog('stop', '⛔ Last order was rejected (buying power) — pausing until manually reset or next day');
+    return;
+  }
 
   // ── SPY trend gate ────────────────────────────────────────────────────────
   // Only scan if SPY has a clear directional trend — flat market = no trades
@@ -788,6 +812,10 @@ async function runEngine() {
     // Block trades that go against the SPY trend
     if (spyTrend.trend === 'UP'   && r.signal === 'BUY_PUT')  { return false; }
     if (spyTrend.trend === 'DOWN' && r.signal === 'BUY_CALL') { return false; }
+    // Fix 2: Block any ticker already held
+    if (heldTickers[r.ticker.toUpperCase()]) {
+      return false;
+    }
     return true;
   });
 
@@ -832,7 +860,25 @@ async function runEngine() {
     try {
       var orderResult = await placeTrade(trade, session);
       var orderId = orderResult && orderResult.order && orderResult.order.id;
+      var orderStatus = orderResult && orderResult.order && orderResult.order.status;
+      var rejectReason = orderResult && orderResult.order && orderResult.order.reason_description;
+
+      // Fix 4: Detect rejection and set circuit breaker
+      if (orderStatus === 'rejected' || (orderResult && orderResult.error)) {
+        var reason = rejectReason || JSON.stringify(orderResult);
+        await addLog('stop', '🚫 ORDER REJECTED: ' + reason);
+        if (reason && reason.toLowerCase().includes('buying power')) {
+          await setState('lastOrderRejected', true);
+          await addLog('stop', '⛔ Buying power circuit breaker activated — halting new orders until reset');
+          clearInterval(engineTimer);
+          clearInterval(monitorTimer);
+          await setState('engineOn', false);
+        }
+        return;
+      }
+
       if (orderId) {
+        await setState('lastOrderRejected', false); // clear circuit breaker on success
         await addLog('trade', 'ORDER PLACED: ' + best.ticker + ' ' + trade.type + ' ID:' + orderId);
         await addTrade({ ticker: trade.ticker, type: trade.type, strike: trade.strike, expiry: '', contracts: trade.contracts, premium: trade.limitPrice, orderId: orderId, result: 'open' });
         // Wait for position to register before next scan
@@ -1050,8 +1096,9 @@ app.get('/api/state', async function(req, res) {
   var dailyLoss = await getState('dailyLoss', 0);
   var dailyProfit = await getState('dailyProfit', 0);
   var profitTargetHit = await getState('profitTargetHit', false);
+  var lastOrderRejected = await getState('lastOrderRejected', false);
   var session = await getState('session', null);
-  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit, profitTargetHit: profitTargetHit, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
+  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit, profitTargetHit: profitTargetHit, lastOrderRejected: lastOrderRejected, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
 });
 
 app.get('/api/logs', async function(req, res) {
@@ -1168,6 +1215,11 @@ app.post('/api/trades/:id/close', async function(req, res) {
 });
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
+app.post('/api/resetcircuitbreaker', async function(req, res) {
+  await setState('lastOrderRejected', false);
+  await addLog('entry', '✅ Circuit breaker manually reset — orders re-enabled');
+  res.json({ ok: true });
+});
 
 app.use('/tradier', async function(req, res) {
   var session = await getState('session', null);
@@ -1197,6 +1249,7 @@ function scheduleMidnightReset() {
     await setState('dailyLoss', 0);
     await setState('dailyProfit', 0);
     await setState('profitTargetHit', false);
+    await setState('lastOrderRejected', false); // clear circuit breaker each new day
     console.log('Daily counters reset at midnight ET');
     scheduleMidnightReset();
   }, msUntil);
