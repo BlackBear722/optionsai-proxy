@@ -407,6 +407,55 @@ async function getSPYTrend(session) {
   }
 }
 
+// ── Earnings blackout ────────────────────────────────────────────────────────
+// Checks if a ticker has earnings within 2 days using Yahoo Finance.
+// Cached per ticker per day to avoid excess calls.
+var earningsCache = {};
+
+async function hasEarningsSoon(ticker) {
+  var today = new Date().toLocaleDateString('en-CA');
+  var cacheKey = ticker + '_' + today;
+  if (earningsCache[cacheKey] !== undefined) return earningsCache[cacheKey];
+
+  try {
+    var r = await fetch('https://query2.finance.yahoo.com/v10/finance/quoteSummary/' + ticker + '?modules=calendarEvents', {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+    });
+    var data = await r.json();
+    var earningsDate = data &&
+      data.quoteSummary &&
+      data.quoteSummary.result &&
+      data.quoteSummary.result[0] &&
+      data.quoteSummary.result[0].calendarEvents &&
+      data.quoteSummary.result[0].calendarEvents.earnings &&
+      data.quoteSummary.result[0].calendarEvents.earnings.earningsDate &&
+      data.quoteSummary.result[0].calendarEvents.earnings.earningsDate[0] &&
+      data.quoteSummary.result[0].calendarEvents.earnings.earningsDate[0].raw;
+
+    if (!earningsDate) {
+      earningsCache[cacheKey] = false;
+      return false;
+    }
+
+    var earningsMs = earningsDate * 1000; // Yahoo returns Unix seconds
+    var nowMs = Date.now();
+    var diffDays = (earningsMs - nowMs) / (1000 * 60 * 60 * 24);
+
+    // Block if earnings within 2 days (before or after)
+    var tooClose = Math.abs(diffDays) <= 2;
+    if (tooClose) {
+      var earningsDateStr = new Date(earningsMs).toLocaleDateString();
+      console.log(ticker + ' earnings on ' + earningsDateStr + ' (' + diffDays.toFixed(1) + ' days away) — blocking');
+    }
+    earningsCache[cacheKey] = tooClose;
+    return tooClose;
+  } catch(e) {
+    console.error('earnings check error ' + ticker + ':', e.message);
+    earningsCache[cacheKey] = false; // on error, allow the trade
+    return false;
+  }
+}
+
 // Last known price cache for change-threshold pre-filter: { ticker: lastPrice }
 var lastScanPrice = {};
 
@@ -423,7 +472,14 @@ async function scanTicker(ticker, settings, marketTrend) {
 
   // ── Pre-filters: skip Claude call entirely if setup is weak ──────────────
 
-  // 1. Extreme RSI — overbought/oversold, no edge
+  // 1. Earnings blackout — never trade into earnings, options go wild
+  var earningsRisk = await hasEarningsSoon(ticker);
+  if (earningsRisk) {
+    await addLog('skip', ticker + ' earnings within 2 days — skipping to avoid vol spike');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'earnings blackout', d: d };
+  }
+
+  // 2. Extreme RSI — overbought/oversold, no edge
   if (rsi > 80 || rsi < 20) {
     await addLog('skip', ticker + ' extreme RSI ' + rsi + ' — skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'extreme RSI', d: d };
@@ -636,7 +692,7 @@ var engineTimer = null, monitorTimer = null;
 async function runEngine() {
   var engineOn = await getState('engineOn', false);
   if (!engineOn) return;
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, contracts: 1, schedule: '5min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, maxDailyTrades: 3, contracts: 1, schedule: '5min' });
   var session = await getState('session', null);
   var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
   var dailyLoss = await getState('dailyLoss', 0);
@@ -734,9 +790,44 @@ async function runEngine() {
     if (spyTrend.trend === 'DOWN' && r.signal === 'BUY_CALL') { return false; }
     return true;
   });
+
+  // Daily trade limit — stop after max trades to avoid overtrading
+  var maxDailyTrades = settings.maxDailyTrades || 3;
+  var today = new Date().toLocaleDateString('en-CA');
+  try {
+    var todayCount = await pool.query(
+      "SELECT COUNT(*) FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE"
+    );
+    var tradesToday = parseInt((todayCount.rows[0] || {}).count || 0);
+    if (tradesToday >= maxDailyTrades) {
+      await addLog('skip', '🔢 Daily trade limit reached (' + tradesToday + '/' + maxDailyTrades + ') — done for today');
+      return;
+    }
+    await addLog('entry', 'Trades today: ' + tradesToday + '/' + maxDailyTrades);
+  } catch(te) { console.error('daily trade count error:', te.message); }
+
   if (signals.length > 0) {
-    var best = signals.sort(function(a, b) { return (parseFloat(b.premium) || 0) - (parseFloat(a.premium) || 0); })[0];
-    await addLog('trade', 'BEST: ' + best.ticker + ' ' + best.signal + ' @ $' + best.premium);
+    // Smarter signal scoring — pick best setup by strength, not just premium size
+    var scored = signals.map(function(r) {
+      var rsi = parseFloat(r.d && r.d.rsi) || 50;
+      var volR = parseFloat(r.d && r.d.volumeRatio) || 1;
+      var bull = parseInt(r.d && r.d.consecutiveBull) || 0;
+      var bear = parseInt(r.d && r.d.consecutiveBear) || 0;
+      var chg  = Math.abs(parseFloat(r.d && r.d.changePct) || 0);
+      // RSI momentum score: distance from neutral 50, capped at 20 pts
+      var rsiScore = Math.min(Math.abs(rsi - 50), 20);
+      // Candle score: consecutive candles in signal direction
+      var candleScore = (r.signal === 'BUY_CALL' ? bull : bear) * 10;
+      // Volume score: volume ratio above average, capped at 20 pts
+      var volScore = Math.min((volR - 1) * 10, 20);
+      // Day change score: bigger move = stronger signal, capped at 15
+      var chgScore = Math.min(chg * 5, 15);
+      var total = rsiScore + candleScore + volScore + chgScore;
+      return Object.assign({}, r, { score: total });
+    });
+    scored.sort(function(a, b) { return b.score - a.score; });
+    var best = scored[0];
+    await addLog('trade', 'BEST: ' + best.ticker + ' ' + best.signal + ' score:' + best.score.toFixed(0) + ' @ $' + best.premium);
     var trade = { action: 'BUY', type: best.signal.indexOf('CALL') >= 0 ? 'CALL' : 'PUT', ticker: best.ticker, strike: parseFloat(best.d && best.d.price ? best.d.price : best.strike), contracts: settings.contracts, limitPrice: best.premium };
     try {
       var orderResult = await placeTrade(trade, session);
@@ -953,7 +1044,7 @@ app.post('/api/killswitch', async function(req, res) {
 
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
-  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, contracts: 1, schedule: '5min' });
+  var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, maxDailyTrades: 3, contracts: 1, schedule: '5min' });
   var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
@@ -988,6 +1079,7 @@ app.get('/api/journal', async function(req, res) {
     var avgLoss = losses.length ? lossPnl/losses.length : 0;
     var winRate = closed.length ? (wins.length/closed.length*100) : 0;
     var profitFactor = Math.abs(lossPnl) > 0 ? winPnl/Math.abs(lossPnl) : 0;
+
     // Group by day
     var byDay = {};
     closed.forEach(function(t){
@@ -999,11 +1091,68 @@ app.get('/api/journal', async function(req, res) {
       byDay[day].pnl+=parseFloat(t.pnl)||0;
     });
     var dailyStats = Object.values(byDay).sort(function(a,b){return b.date.localeCompare(a.date);});
+
+    // Group by ticker
+    var byTicker = {};
+    closed.forEach(function(t){
+      var tk = (t.ticker||'UNKNOWN').trim();
+      if(!byTicker[tk]) byTicker[tk]={ticker:tk,trades:0,wins:0,losses:0,pnl:0};
+      byTicker[tk].trades++;
+      if(t.result==='win')byTicker[tk].wins++;
+      else byTicker[tk].losses++;
+      byTicker[tk].pnl+=parseFloat(t.pnl)||0;
+    });
+    var tickerStats = Object.values(byTicker).map(function(s){
+      return Object.assign({}, s, {
+        winRate: s.trades > 0 ? (s.wins/s.trades*100).toFixed(1) : '0.0',
+        pnl: s.pnl.toFixed(2)
+      });
+    }).sort(function(a,b){ return parseFloat(b.pnl)-parseFloat(a.pnl); });
+
+    // Group by hour of day (ET)
+    var byHour = {};
+    closed.forEach(function(t){
+      var tsDate = t.ts instanceof Date ? t.ts : new Date(t.ts);
+      var etStr = tsDate.toLocaleString('en-US', { timeZone: 'America/New_York' });
+      var etDate = new Date(etStr);
+      var hour = etDate.getHours();
+      var label = (hour > 12 ? hour-12 : hour) + ':00 ' + (hour >= 12 ? 'PM' : 'AM');
+      if(!byHour[hour]) byHour[hour]={hour:hour,label:label,trades:0,wins:0,losses:0,pnl:0};
+      byHour[hour].trades++;
+      if(t.result==='win')byHour[hour].wins++;
+      else byHour[hour].losses++;
+      byHour[hour].pnl+=parseFloat(t.pnl)||0;
+    });
+    var hourStats = Object.values(byHour).map(function(s){
+      return Object.assign({}, s, {
+        winRate: s.trades > 0 ? (s.wins/s.trades*100).toFixed(1) : '0.0',
+        pnl: s.pnl.toFixed(2)
+      });
+    }).sort(function(a,b){ return a.hour-b.hour; });
+
+    // Group by signal type (CALL vs PUT)
+    var byType = { CALL:{trades:0,wins:0,losses:0,pnl:0}, PUT:{trades:0,wins:0,losses:0,pnl:0} };
+    closed.forEach(function(t){
+      var tp = (t.type||'').toUpperCase();
+      if(tp !== 'CALL' && tp !== 'PUT') return;
+      byType[tp].trades++;
+      if(t.result==='win') byType[tp].wins++;
+      else byType[tp].losses++;
+      byType[tp].pnl += parseFloat(t.pnl)||0;
+    });
+    var typeStats = Object.entries(byType).map(function(e){
+      return { type:e[0], trades:e[1].trades, wins:e[1].wins, losses:e[1].losses,
+        winRate: e[1].trades > 0 ? (e[1].wins/e[1].trades*100).toFixed(1) : '0.0',
+        pnl: e[1].pnl.toFixed(2) };
+    });
+
     res.json({
       totalTrades:closed.length, openTrades:trades.filter(function(t){return t.result==='open';}).length,
       wins:wins.length, losses:losses.length, winRate:winRate.toFixed(1),
       totalPnl:totalPnl.toFixed(2), avgWin:avgWin.toFixed(2), avgLoss:avgLoss.toFixed(2),
-      profitFactor:profitFactor.toFixed(2), dailyStats:dailyStats, recentTrades:trades.slice(0,20)
+      profitFactor:profitFactor.toFixed(2),
+      dailyStats:dailyStats, tickerStats:tickerStats, hourStats:hourStats, typeStats:typeStats,
+      recentTrades:trades.slice(0,20)
     });
   } catch(e) { res.status(500).json({error:e.message}); }
 });
