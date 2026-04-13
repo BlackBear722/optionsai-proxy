@@ -290,24 +290,73 @@ app.get('/quote/:ticker', async function(req, res) {
   res.json(d);
 });
 
-// Claude scan
-var CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+// Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
+var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, and candle momentum to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 45-65, price above VWAP, 2+ consecutive bull candles, positive day change\n- BUY_PUT: RSI 35-55, price below VWAP, 2+ consecutive bear candles, negative day change\n- HIGH confidence: all conditions clearly met\n- MEDIUM confidence: most conditions met, one borderline\n- LOW or NONE: mixed signals, RSI overbought/oversold, or no clear direction\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"MEDIUM","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+
+// Last known price cache for change-threshold pre-filter: { ticker: lastPrice }
+var lastScanPrice = {};
 
 async function scanTicker(ticker, settings) {
   var d = await fetchQuote(ticker);
   if (!d) { await addLog('skip', 'no data: ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no data' }; }
   if (!d.isMarketOpen) { await addLog('skip', 'market closed: ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'market closed' }; }
 
-  var rsi = parseFloat(d.rsi) || 50;
+  var rsi    = parseFloat(d.rsi)          || 50;
   var spread = parseFloat(d.spreadEstPct) || 0;
-  if (rsi > 80 || rsi < 20) { await addLog('skip', 'extreme RSI ' + rsi + ': ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'extreme RSI', d: d }; }
-  if (spread > 2.0) { await addLog('skip', 'wide spread ' + spread + ': ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'wide spread', d: d }; }
+  var chg    = parseFloat(d.changePct)    || 0;
+  var volR   = parseFloat(d.volumeRatio)  || 1;
+  var mid    = d.minutesIntoDay           || 0;
 
-  await addLog('entry', 'scanning ' + ticker + ' $' + d.price + ' (' + d.changePct + '%) RSI:' + d.rsi + ' src:' + d.source);
+  // ── Pre-filters: skip Claude call entirely if setup is weak ──────────────
+
+  // 1. Extreme RSI — overbought/oversold, no edge
+  if (rsi > 80 || rsi < 20) {
+    await addLog('skip', ticker + ' extreme RSI ' + rsi + ' — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'extreme RSI', d: d };
+  }
+
+  // 2. Wide spread — too expensive to trade profitably
+  if (spread > 2.0) {
+    await addLog('skip', ticker + ' wide spread ' + spread + '% — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'wide spread', d: d };
+  }
+
+  // 3. Flat market — no intraday movement, no signal
+  if (Math.abs(chg) < 0.3) {
+    await addLog('skip', ticker + ' flat ' + chg + '% change — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'flat market', d: d };
+  }
+
+  // 4. Low volume — no real momentum behind the move
+  if (volR < 0.7) {
+    await addLog('skip', ticker + ' low volume ' + volR + 'x avg — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'low volume', d: d };
+  }
+
+  // 5. First 30 minutes — too noisy, wide spreads, fake moves
+  if (mid < 30) {
+    await addLog('skip', ticker + ' first 30min (' + mid + 'min in) — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'opening noise', d: d };
+  }
+
+  // 6. Price barely moved since last scan — no new information for Claude
+  var lastPrice = lastScanPrice[ticker];
+  var currentPrice = parseFloat(d.price);
+  if (lastPrice) {
+    var priceDeltaPct = Math.abs((currentPrice - lastPrice) / lastPrice * 100);
+    if (priceDeltaPct < 0.4) {
+      await addLog('skip', ticker + ' price unchanged (' + priceDeltaPct.toFixed(2) + '% move) — skipping Claude');
+      return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no price change', d: d };
+    }
+  }
+  lastScanPrice[ticker] = currentPrice;
+
+  // ── Passed all filters — call Claude ────────────────────────────────────
+  await addLog('entry', 'scanning ' + ticker + ' $' + d.price + ' (' + d.changePct + '%) RSI:' + d.rsi + ' vol:' + volR + 'x src:' + d.source);
 
   try {
-    var priceVsVwap = parseFloat(d.price) > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
+    var priceVsVwap = currentPrice > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
     var userMsg = 'Ticker: ' + ticker +
       '\nPrice: $' + d.price + ' | Change: ' + d.changePct + '% today' +
       '\nRSI (14-period, 5-min): ' + d.rsi +
@@ -333,7 +382,7 @@ async function scanTicker(ticker, settings) {
       var result = JSON.parse(match[1]);
       await addLog(result.confidence === 'HIGH' || result.confidence === 'MEDIUM' ? 'trade' : 'skip',
         'Claude ' + ticker + ': ' + result.signal + ' (' + result.confidence + ') $' + result.premium + ' — ' + result.reason);
-      return { ticker: ticker, signal: result.signal, confidence: result.confidence, premium: result.premium, strike: parseFloat(d.price), reason: result.reason, d: d };
+      return { ticker: ticker, signal: result.signal, confidence: result.confidence, premium: result.premium, strike: currentPrice, reason: result.reason, d: d };
     } else {
       await addLog('skip', 'Claude no block for ' + ticker + '. Raw: ' + text.slice(0, 150));
     }
@@ -504,6 +553,18 @@ async function runEngine() {
     clearInterval(engineTimer);
     clearInterval(monitorTimer);
     scheduleMarketOpenRestart();
+    return;
+  }
+
+  // Time-of-day throttle — skip scanning during midday chop to save API credits
+  // Active windows: 9:30-11:00am ET (morning momentum) and 2:30-4:00pm ET (afternoon close)
+  var etNowE = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var midE = (etNowE.getHours() - 9) * 60 + etNowE.getMinutes() - 30; // minutes since 9:30am
+  var inMorning   = midE >= 30  && midE <= 90;   // 10:00am–11:00am (after opening noise)
+  var inAfternoon = midE >= 300 && midE <= 390;  // 2:30pm–4:00pm
+  var inOpening   = midE >= 0   && midE < 30;    // 9:30–10:00am — skip (too noisy)
+  if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
+    await addLog('skip', '⏸ Midday chop (' + Math.floor(midE/60+9.5) + ':' + ('0'+(midE%60)).slice(-2) + ' ET) — pausing scan to save API credits');
     return;
   }
   var positions = [];
