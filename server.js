@@ -352,12 +352,65 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, and candle momentum to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 45-65, price above VWAP, 2+ consecutive bull candles, positive day change\n- BUY_PUT: RSI 35-55, price below VWAP, 2+ consecutive bear candles, negative day change\n- HIGH confidence: all conditions clearly met\n- MEDIUM confidence: most conditions met, one borderline\n- LOW or NONE: mixed signals, RSI overbought/oversold, or no clear direction\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"MEDIUM","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 50-65, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend is UP\n- BUY_PUT: RSI 35-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend is DOWN\n- HIGH confidence: ALL conditions clearly met\n- MEDIUM confidence: most conditions met but one is borderline — prefer NONE over MEDIUM when trend is weak\n- LOW or NONE: any mixed signals, trend disagreement, or RSI overbought/oversold\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+
+// ── SPY Trend Filter ─────────────────────────────────────────────────────────
+// Fetches SPY 5-min candles and calculates 9-period MA to determine market trend.
+// Returns 'UP', 'DOWN', or 'FLAT'. Cached for 5 minutes to avoid excess API calls.
+var spyTrendCache = { trend: 'FLAT', ts: 0, ma9: 0, price: 0 };
+
+async function getSPYTrend(session) {
+  // Return cached result if less than 5 minutes old
+  if (Date.now() - spyTrendCache.ts < 5 * 60 * 1000) return spyTrendCache;
+
+  try {
+    var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+    var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    var dateStr = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
+
+    var r = await fetch(base + '/markets/timesales?symbol=SPY&interval=5min&start=' + dateStr + '%2009:30&session_filter=open', {
+      headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+    });
+    var data = await r.json();
+    var series = data && data.series && data.series.data;
+    if (!series) {
+      console.log('SPY trend: no candle data');
+      spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: 0 };
+      return spyTrendCache;
+    }
+
+    var candles = Array.isArray(series) ? series : [series];
+    var closes = candles.map(function(c) { return parseFloat(c.close); }).filter(function(v) { return !isNaN(v); });
+
+    if (closes.length < 9) {
+      console.log('SPY trend: not enough candles yet (' + closes.length + ')');
+      spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: closes[closes.length-1] || 0 };
+      return spyTrendCache;
+    }
+
+    // 9-period simple moving average of the last 9 closes
+    var last9 = closes.slice(-9);
+    var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
+    var price = closes[closes.length - 1];
+    var diffPct = ((price - ma9) / ma9) * 100;
+
+    // Require at least 0.1% above/below MA to call a trend — avoids noise
+    var trend = diffPct > 0.1 ? 'UP' : diffPct < -0.1 ? 'DOWN' : 'FLAT';
+
+    console.log('SPY trend: ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
+    spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
+    return spyTrendCache;
+  } catch(e) {
+    console.error('SPY trend error:', e.message);
+    spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: 0 };
+    return spyTrendCache;
+  }
+}
 
 // Last known price cache for change-threshold pre-filter: { ticker: lastPrice }
 var lastScanPrice = {};
 
-async function scanTicker(ticker, settings) {
+async function scanTicker(ticker, settings, marketTrend) {
   var d = await fetchQuote(ticker);
   if (!d) { await addLog('skip', 'no data: ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no data' }; }
   if (!d.isMarketOpen) { await addLog('skip', 'market closed: ' + ticker); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'market closed' }; }
@@ -412,6 +465,7 @@ async function scanTicker(ticker, settings) {
   try {
     var priceVsVwap = currentPrice > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
     var userMsg = 'Ticker: ' + ticker +
+      '\nMarket trend (SPY vs 9MA): ' + (marketTrend || 'UNKNOWN') +
       '\nPrice: $' + d.price + ' | Change: ' + d.changePct + '% today' +
       '\nRSI (14-period, 5-min): ' + d.rsi +
       '\nVWAP: $' + d.vwap + ' | Price is ' + priceVsVwap + ' VWAP' +
@@ -654,14 +708,32 @@ async function runEngine() {
   try { positions = await getPositions(session); } catch(e) { await addLog('stop', 'positions error: ' + e.message); return; }
   await addLog('entry', 'open positions: ' + positions.length + '/' + settings.maxPositions);
   if (positions.length >= settings.maxPositions) { await addLog('skip', 'max positions reached (' + positions.length + '/' + settings.maxPositions + ') — not buying'); return; }
+
+  // ── SPY trend gate ────────────────────────────────────────────────────────
+  // Only scan if SPY has a clear directional trend — flat market = no trades
+  var spyTrend = await getSPYTrend(session);
+  if (spyTrend.trend === 'FLAT') {
+    await addLog('skip', '📊 SPY trend FLAT (MA9=$' + spyTrend.ma9.toFixed(2) + ') — no clear direction, skipping scan');
+    return;
+  }
+  await addLog('entry', '📊 SPY trend: ' + spyTrend.trend + ' | price=$' + spyTrend.price.toFixed(2) + ' MA9=$' + spyTrend.ma9.toFixed(2));
+
   await addLog('entry', 'scanning ' + watchlist.length + ' tickers: ' + watchlist.join(', '));
   var results = [];
   for (var i = 0; i < watchlist.length; i++) {
-    var result = await scanTicker(watchlist[i], settings);
+    var result = await scanTicker(watchlist[i], settings, spyTrend.trend);
     results.push(result);
-    // No delay needed - Tradier API has no rate limits
   }
-  var signals = results.filter(function(r) { return r.signal === 'BUY_CALL' || r.signal === 'BUY_PUT'; });
+
+  // HIGH confidence only — MEDIUM signals have poor historical win rate
+  var signals = results.filter(function(r) {
+    if (r.signal !== 'BUY_CALL' && r.signal !== 'BUY_PUT') return false;
+    if (r.confidence !== 'HIGH') return false;
+    // Block trades that go against the SPY trend
+    if (spyTrend.trend === 'UP'   && r.signal === 'BUY_PUT')  { return false; }
+    if (spyTrend.trend === 'DOWN' && r.signal === 'BUY_CALL') { return false; }
+    return true;
+  });
   if (signals.length > 0) {
     var best = signals.sort(function(a, b) { return (parseFloat(b.premium) || 0) - (parseFloat(a.premium) || 0); })[0];
     await addLog('trade', 'BEST: ' + best.ticker + ' ' + best.signal + ' @ $' + best.premium);
