@@ -50,6 +50,65 @@ async function addTrade(t) {
   } catch(e) { console.error('addTrade:', e.message); }
 }
 
+// ── Market holiday checker ───────────────────────────────────────────────────
+// Calls Tradier's /markets/calendar once per day and caches the result.
+// Returns true if today is a market holiday or early-close day.
+var holidayCache = { date: null, isHoliday: false, isEarlyClose: false, closeTime: null };
+
+async function checkMarketHoliday() {
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var todayStr = etNow.getFullYear() + '-' +
+    ('0' + (etNow.getMonth() + 1)).slice(-2) + '-' +
+    ('0' + etNow.getDate()).slice(-2);
+
+  // Return cached result if already checked today
+  if (holidayCache.date === todayStr) return holidayCache;
+
+  var session = await getState('session', null);
+  if (!session || !session.token) {
+    // No session yet — assume open, will recheck next scan
+    return { date: todayStr, isHoliday: false, isEarlyClose: false, closeTime: null };
+  }
+
+  try {
+    var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+    var month = etNow.getFullYear() + '-' + ('0' + (etNow.getMonth() + 1)).slice(-2);
+    var r = await fetch(base + '/markets/calendar?month=' + month, {
+      headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+    });
+    var data = await r.json();
+    var days = data && data.calendar && data.calendar.days && data.calendar.days.day;
+    if (!days) {
+      console.log('Holiday calendar: no data returned');
+      holidayCache = { date: todayStr, isHoliday: false, isEarlyClose: false, closeTime: null };
+      return holidayCache;
+    }
+
+    var arr = Array.isArray(days) ? days : [days];
+    var today = arr.find(function(d) { return d.date === todayStr; });
+
+    if (!today) {
+      // Date not in calendar — treat as normal trading day
+      holidayCache = { date: todayStr, isHoliday: false, isEarlyClose: false, closeTime: null };
+    } else if (today.status === 'closed') {
+      console.log('Market holiday: ' + todayStr + ' (' + (today.description || 'holiday') + ')');
+      holidayCache = { date: todayStr, isHoliday: true, isEarlyClose: false, closeTime: null };
+    } else if (today.status === 'early_close' || (today.open && today.open.end && today.open.end !== '16:00')) {
+      var closeTime = (today.open && today.open.end) || '13:00';
+      console.log('Early close day: ' + todayStr + ' closes at ' + closeTime);
+      holidayCache = { date: todayStr, isHoliday: false, isEarlyClose: true, closeTime: closeTime };
+    } else {
+      holidayCache = { date: todayStr, isHoliday: false, isEarlyClose: false, closeTime: null };
+    }
+  } catch(e) {
+    console.error('Holiday calendar error:', e.message);
+    // On error, assume market is open — safer than blocking all trading
+    holidayCache = { date: todayStr, isHoliday: false, isEarlyClose: false, closeTime: null };
+  }
+
+  return holidayCache;
+}
+
 // Get next weekly expiry (nearest Friday at least 1 day away)
 // SPY/QQQ/IWM have daily 0DTE options — all others use nearest weekly Friday
 function getNextExpiry(ticker) {
@@ -183,7 +242,8 @@ async function fetchQuote(ticker) {
         var volRatio = vol / avgVol;
         var spread = (q.ask && q.bid) ? (((parseFloat(q.ask) - parseFloat(q.bid)) / price) * 100).toFixed(3) : (((high-low)/price)*100).toFixed(3);
         var mid = (etNow.getHours() - 9) * 60 + etNow.getMinutes() - 30;
-        var isOpen = q.tradeable === true || (mid >= 0 && mid <= 390);
+        var isWeekdayNow = etNow.getDay() >= 1 && etNow.getDay() <= 5;
+        var isOpen = isWeekdayNow && mid >= 0 && mid <= 390;
 
         // Parse 5-min candles for real RSI, VWAP, consecutive candles
         var rsi = 50, vwap = ((high + low + price) / 3).toFixed(2);
@@ -268,7 +328,7 @@ async function fetchQuote(ticker) {
     var etNow2 = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
     var etD2 = new Date(etNow2);
     var mid2 = (etD2.getHours()-9)*60+etD2.getMinutes()-30;
-    var isOpen2 = mid2>=0&&mid2<=390;
+    var isOpen2 = etD2.getDay() >= 1 && etD2.getDay() <= 5 && mid2 >= 0 && mid2 <= 390;
     console.log('Yahoo ' + ticker + ' $' + price2 + ' ' + chgPct2.toFixed(2) + '%');
     return {
       ticker: ticker, price: price2.toFixed(2), changePct: chgPct2.toFixed(2),
@@ -560,6 +620,29 @@ async function runEngine() {
   // Active windows: 9:30-11:00am ET (morning momentum) and 2:30-4:00pm ET (afternoon close)
   var etNowE = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   var midE = (etNowE.getHours() - 9) * 60 + etNowE.getMinutes() - 30; // minutes since 9:30am
+
+  // Market holiday / early close check
+  var holidayInfo = await checkMarketHoliday();
+  if (holidayInfo.isHoliday) {
+    await addLog('skip', '🏖 Market holiday today — engine idle');
+    return;
+  }
+  if (holidayInfo.isEarlyClose) {
+    // Parse early close time e.g. "13:00" → minutes since 9:30am
+    var parts = (holidayInfo.closeTime || '13:00').split(':');
+    var earlyCloseMid = (parseInt(parts[0]) - 9) * 60 + parseInt(parts[1] || 0) - 30;
+    if (midE >= earlyCloseMid) {
+      await addLog('skip', '⏰ Early close day — market closed at ' + holidayInfo.closeTime + ' ET');
+      return;
+    }
+  }
+
+  // Weekend check (belt-and-suspenders on top of isOpen in fetchQuote)
+  if (etNowE.getDay() === 0 || etNowE.getDay() === 6) {
+    await addLog('skip', '📅 Weekend — market closed');
+    return;
+  }
+
   var inMorning   = midE >= 30  && midE <= 90;   // 10:00am–11:00am (after opening noise)
   var inAfternoon = midE >= 300 && midE <= 390;  // 2:30pm–4:00pm
   var inOpening   = midE >= 0   && midE < 30;    // 9:30–10:00am — skip (too noisy)
