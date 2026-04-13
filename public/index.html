@@ -317,6 +317,13 @@
       <div style="font-size:10px;color:#3a6a9c;margin-top:3px">Engine stopped. Auto-restarts at 9:30am ET next trading day.</div>
     </div>
 
+    <!-- Circuit breaker banner -->
+    <div id="circuit-breaker-banner" style="display:none;background:#1a0000;border:1px solid #ff444444;border-radius:8px;padding:12px 16px;margin-bottom:8px">
+      <div style="font-size:11px;color:#ff4466;font-weight:700">⛔ CIRCUIT BREAKER ACTIVE — ORDER REJECTED</div>
+      <div style="font-size:10px;color:#3a6a9c;margin-top:3px">Last order was rejected due to insufficient buying power. New orders are halted.</div>
+      <button onclick="resetCircuitBreaker()" style="margin-top:8px;background:#330000;border:1px solid #ff444466;color:#ff8888;font-size:10px;padding:4px 12px;border-radius:4px;cursor:pointer;font-family:inherit">RESET &amp; RE-ENABLE ORDERS</button>
+    </div>
+
     <!-- Daily loss bar -->
     <div class="ai-card">
       <div class="ai-card-title">🛡️ DAILY LOSS GUARD</div>
@@ -909,6 +916,8 @@ async function loadServerState(){
     // Show profit target hit banner if applicable
     const banner=document.getElementById('profit-target-banner');
     if(banner) banner.style.display=state.profitTargetHit?'block':'none';
+    const cbBanner=document.getElementById('circuit-breaker-banner');
+    if(cbBanner) cbBanner.style.display=state.lastOrderRejected?'block':'none';
   }catch(e){console.error('loadServerState:',e);}
 }
 
@@ -967,8 +976,19 @@ async function refreshLiveStats(){
     // Show/hide profit target hit banner
     const banner = document.getElementById('profit-target-banner');
     if(banner) banner.style.display = state.profitTargetHit ? 'block' : 'none';
+    const cbBanner = document.getElementById('circuit-breaker-banner');
+    if(cbBanner) cbBanner.style.display = state.lastOrderRejected ? 'block' : 'none';
 
   } catch(e){ console.error('refreshLiveStats:', e); }
+}
+
+async function resetCircuitBreaker(){
+  try{
+    await fetch('/api/resetcircuitbreaker',{method:'POST'});
+    const cbBanner=document.getElementById('circuit-breaker-banner');
+    if(cbBanner) cbBanner.style.display='none';
+    addLog('✅ Circuit breaker reset — orders re-enabled','entry');
+  }catch(e){console.error('resetCircuitBreaker:',e);}
 }
 
 async function saveSettingsToServer(){
