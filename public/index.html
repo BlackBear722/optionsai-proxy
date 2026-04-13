@@ -284,6 +284,10 @@
         <span>Max open positions</span>
         <input type="number" class="setting-input" id="max-positions" value="3" min="1" max="10" onchange="updateSettings()">
       </div>
+      <div class="setting-row">
+        <span>Max trades per day <span style="color:#ffaa00;font-size:9px">LIMIT</span></span>
+        <input type="number" class="setting-input" id="max-daily-trades" value="3" min="1" max="20" onchange="updateSettings()">
+      </div>
       <div class="setting-row" style="margin-bottom:0">
         <span>Scan interval</span>
         <select class="setting-input" id="scan-schedule" onchange="updateSettings()" style="width:110px">
@@ -360,6 +364,18 @@
     <!-- Recent trades -->
     <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;letter-spacing:1.5px">RECENT TRADES</div>
     <div id="journal-trades"></div>
+
+    <!-- By ticker breakdown -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;margin-top:14px;letter-spacing:1.5px">BY TICKER</div>
+    <div id="journal-ticker"></div>
+
+    <!-- By hour breakdown -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;margin-top:14px;letter-spacing:1.5px">BY TIME OF DAY</div>
+    <div id="journal-hour"></div>
+
+    <!-- By type breakdown -->
+    <div style="font-size:10px;color:#3a6a9c;margin-bottom:8px;margin-top:14px;letter-spacing:1.5px">CALLS VS PUTS</div>
+    <div id="journal-type" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"></div>
   </div>
 
   <!-- HOW IT WORKS -->
@@ -878,6 +894,7 @@ async function loadServerState(){
       document.getElementById('daily-profit-target').value=settings.dailyProfitTarget||200;
       document.getElementById('contracts-per-trade').value=settings.contracts||1;
       document.getElementById('max-positions').value=settings.maxPositions||3;
+      document.getElementById('max-daily-trades').value=settings.maxDailyTrades||3;
       document.getElementById('scan-schedule').value=settings.schedule||'5min';
     }
     if(state.watchlist){watchlist=state.watchlist;renderWatchlist();}
@@ -1082,6 +1099,51 @@ async function loadJournal(){
     } else {
       document.getElementById('journal-trades').innerHTML='<div style="color:#3a6a9c;font-size:12px">No trades yet.</div>';
     }
+
+    // By ticker breakdown
+    const tickerEl = document.getElementById('journal-ticker');
+    if(tickerEl){
+      if(j.tickerStats && j.tickerStats.length){
+        tickerEl.innerHTML = j.tickerStats.map(s=>`
+          <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:6px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:12px;color:#e0f0ff;font-weight:700">${s.ticker}</div>
+              <div style="font-size:11px;color:#3a6a9c">${s.trades} trades · ${s.wins}W ${s.losses}L · ${s.winRate}% win</div>
+            </div>
+            <div style="font-size:15px;font-weight:700;color:${parseFloat(s.pnl)>=0?'#00ff88':'#ff4466'}">${parseFloat(s.pnl)>=0?'+':''}$${parseFloat(s.pnl).toFixed(2)}</div>
+          </div>`).join('');
+      } else {
+        tickerEl.innerHTML = '<div style="color:#3a6a9c;font-size:12px">No data yet.</div>';
+      }
+    }
+
+    // By hour breakdown
+    const hourEl = document.getElementById('journal-hour');
+    if(hourEl){
+      if(j.hourStats && j.hourStats.length){
+        hourEl.innerHTML = j.hourStats.map(s=>`
+          <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:6px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:12px;color:#e0f0ff;font-weight:700">${s.label}</div>
+              <div style="font-size:11px;color:#3a6a9c">${s.trades} trades · ${s.winRate}% win rate</div>
+            </div>
+            <div style="font-size:15px;font-weight:700;color:${parseFloat(s.pnl)>=0?'#00ff88':'#ff4466'}">${parseFloat(s.pnl)>=0?'+':''}$${parseFloat(s.pnl).toFixed(2)}</div>
+          </div>`).join('');
+      } else {
+        hourEl.innerHTML = '<div style="color:#3a6a9c;font-size:12px">No data yet.</div>';
+      }
+    }
+
+    // Calls vs Puts breakdown
+    const typeEl = document.getElementById('journal-type');
+    if(typeEl && j.typeStats && j.typeStats.length){
+      typeEl.innerHTML = j.typeStats.map(s=>`
+        <div style="background:#0d1a2a;border:1px solid #1a3050;border-radius:8px;padding:12px">
+          <div style="font-size:10px;color:#3a6a9c;margin-bottom:4px">${s.type}S</div>
+          <div style="font-size:16px;font-weight:700;color:${s.type==='CALL'?'#00ff88':'#ff8844'}">${s.winRate}%</div>
+          <div style="font-size:10px;color:#3a6a9c;margin-top:2px">${s.trades} trades · ${parseFloat(s.pnl)>=0?'+':''}$${parseFloat(s.pnl).toFixed(2)}</div>
+        </div>`).join('');
+    }
   }catch(e){console.error('journal error:',e);}
 }
 
@@ -1107,6 +1169,7 @@ function updateSettings(){
   settings.dailyProfitTarget=parseFloat(document.getElementById('daily-profit-target').value)||200;
   settings.contracts=parseInt(document.getElementById('contracts-per-trade').value)||1;
   settings.maxPositions=parseInt(document.getElementById('max-positions').value)||3;
+  settings.maxDailyTrades=parseInt(document.getElementById('max-daily-trades').value)||3;
   settings.schedule=document.getElementById('scan-schedule').value;
   document.getElementById('daily-max-label').textContent=`$${settings.dailyMax} limit`;
   saveSettingsToServer();
