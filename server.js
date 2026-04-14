@@ -1309,6 +1309,163 @@ function scheduleMarketOpenRestart() {
   }, msUntil);
 }
 
+
+app.get('/dashboard', async function(req, res) {
+  try {
+    var r = await pool.query('SELECT * FROM trades ORDER BY ts DESC');
+    var trades = r.rows;
+    var closed = trades.filter(function(t){return t.result==='win'||t.result==='loss';});
+    var wins = closed.filter(function(t){return t.result==='win';});
+    var losses = closed.filter(function(t){return t.result==='loss';});
+    var totalPnl = closed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var winPnl = wins.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var lossPnl = losses.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var avgWin = wins.length ? winPnl/wins.length : 0;
+    var avgLoss = losses.length ? lossPnl/losses.length : 0;
+    var winRate = closed.length ? (wins.length/closed.length*100) : 0;
+    var profitFactor = Math.abs(lossPnl) > 0 ? winPnl/Math.abs(lossPnl) : 0;
+    var byDay = {};
+    closed.forEach(function(t){
+      var day = t.ts.toISOString ? t.ts.toISOString().slice(0,10) : String(t.ts).slice(0,10);
+      if(!byDay[day]) byDay[day]={date:day,trades:0,wins:0,losses:0,pnl:0};
+      byDay[day].trades++;
+      if(t.result==='win') byDay[day].wins++; else byDay[day].losses++;
+      byDay[day].pnl += parseFloat(t.pnl)||0;
+    });
+    var dailyStats = Object.values(byDay).sort(function(a,b){return a.date.localeCompare(b.date);});
+    var journal = {
+      totalTrades: closed.length, wins: wins.length, losses: losses.length,
+      winRate: winRate.toFixed(1), totalPnl: totalPnl.toFixed(2),
+      avgWin: avgWin.toFixed(2), avgLoss: avgLoss.toFixed(2),
+      profitFactor: profitFactor.toFixed(2),
+      dailyStats: dailyStats, recentTrades: trades.slice(0,10)
+    };
+    var engineOn = await getState('engineOn', false);
+    var dailyProfit = await getState('dailyProfit', 0);
+    var dailyLoss = await getState('dailyLoss', 0);
+    var state = { engineOn: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss };
+    var data = JSON.stringify({ journal: journal, state: state });
+    var html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OptionsAI Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"><\/script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px;min-height:100vh}
+h1{font-size:20px;font-weight:500;margin-bottom:20px;color:#fff}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.g2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px}
+.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}
+.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+.mv{font-size:24px;font-weight:500;color:#fff}
+.pos{color:#1D9E75}.neg{color:#E24B4A}
+.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}
+.ct{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;margin-bottom:14px}
+.cw{position:relative;width:100%;height:200px}
+.tr{display:grid;grid-template-columns:100px 60px 50px 70px 70px 1fr;gap:8px;align-items:center;font-size:12px;padding:8px 0;border-bottom:1px solid #2a2a2a}
+.tr:last-child{border-bottom:none}
+.th{font-size:11px;color:#666;font-weight:500}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500}
+.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}
+.rr{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #2a2a2a}
+.rr:last-child{border-bottom:none}
+.sb{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.don{background:#1D9E75}.dof{background:#666}
+.rb{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;cursor:pointer}
+.rb:hover{background:#222}
+.golive{border:1px solid #1D9E75;background:#0a2e1f;border-radius:12px;padding:16px 20px;margin-top:16px;display:none}
+.golive p{color:#1D9E75;font-size:13px}
+@media(max-width:600px){.g4{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="sb">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="dot" id="ed"></span>
+    <span id="el" style="font-size:14px"></span>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="lu" style="font-size:11px;color:#666"></span>
+    <button class="rb" onclick="location.reload()">Refresh</button>
+  </div>
+</div>
+<h1>OptionsAI — Paper Trading Dashboard</h1>
+<div class="g4">
+  <div class="metric"><div class="ml">Total P&amp;L</div><div class="mv" id="spnl">—</div></div>
+  <div class="metric"><div class="ml">Win rate</div><div class="mv" id="swr">—</div></div>
+  <div class="metric"><div class="ml">Profit factor</div><div class="mv" id="spf">—</div></div>
+  <div class="metric"><div class="ml">Total trades</div><div class="mv" id="str">—</div></div>
+</div>
+<div class="g2">
+  <div class="metric"><div class="ml">Today's P&amp;L</div><div class="mv" id="std">—</div></div>
+  <div class="metric"><div class="ml">Avg win / avg loss</div><div class="mv" id="savg" style="font-size:16px">—</div></div>
+</div>
+<div class="card"><div class="ct">Cumulative P&amp;L</div><div class="cw"><canvas id="pc"></canvas></div></div>
+<div class="card"><div class="ct">Daily P&amp;L</div><div class="cw"><canvas id="dc"></canvas></div></div>
+<div class="card">
+  <div class="ct">Recent trades</div>
+  <div class="tr th"><span>Time</span><span>Ticker</span><span>Type</span><span>Result</span><span>P&amp;L</span><span>Strike</span></div>
+  <div id="tb"></div>
+</div>
+<div class="card">
+  <div class="ct">Go-live readiness</div>
+  <div id="rb"></div>
+  <div class="golive" id="gl">
+    <p style="font-weight:500;margin-bottom:4px">All criteria met — ready to go live</p>
+    <p>Switch to your Tradier production token to start trading with real funds.</p>
+  </div>
+</div>
+<script>
+var D=` + data + `;
+var j=D.journal,s=D.state;
+document.getElementById('ed').className='dot '+(s.engineOn?'don':'dof');
+document.getElementById('el').textContent=s.engineOn?'Engine running':'Engine off';
+document.getElementById('lu').textContent='Updated '+new Date().toLocaleTimeString();
+var pnl=parseFloat(j.totalPnl)||0;
+var pe=document.getElementById('spnl');
+pe.textContent=(pnl>=0?'+':'')+'$'+Math.abs(pnl).toFixed(2);
+pe.className='mv '+(pnl>0?'pos':pnl<0?'neg':'');
+var wr=parseFloat(j.winRate)||0;
+var we=document.getElementById('swr');
+we.textContent=j.totalTrades>0?wr.toFixed(1)+'%':'—';
+we.className='mv '+(wr>=50?'pos':wr>0?'neg':'');
+var pf=parseFloat(j.profitFactor)||0;
+var pfe=document.getElementById('spf');
+pfe.textContent=pf>0?pf.toFixed(2):'—';
+pfe.className='mv '+(pf>=1.5?'pos':pf>0?'neg':'');
+document.getElementById('str').textContent=j.totalTrades||0;
+var tp=(parseFloat(s.dailyProfit)||0)-(parseFloat(s.dailyLoss)||0);
+var te=document.getElementById('std');
+te.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);
+te.className='mv '+(tp>0?'pos':tp<0?'neg':'');
+var aw=parseFloat(j.avgWin)||0,al=parseFloat(j.avgLoss)||0;
+document.getElementById('savg').textContent=(aw>0||al<0)?'+$'+aw.toFixed(2)+' / -$'+Math.abs(al).toFixed(2):'—';
+var sorted=j.dailyStats.slice().sort(function(a,b){return a.date.localeCompare(b.date);});
+var labels=sorted.map(function(d){return d.date.slice(5);});
+var cum=[],run=0;
+sorted.forEach(function(d){run+=parseFloat(d.pnl)||0;cum.push(parseFloat(run.toFixed(2)));});
+var lv=cum[cum.length-1]||0;
+new Chart(document.getElementById('pc'),{type:'line',data:{labels:labels.length?labels:['—'],datasets:[{data:cum.length?cum:[0],borderColor:lv>=0?'#1D9E75':'#E24B4A',backgroundColor:'transparent',pointRadius:3,tension:0.3,borderWidth:2,pointBackgroundColor:lv>=0?'#1D9E75':'#E24B4A'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return'$'+v.toFixed(0);},color:'#666',font:{size:11}},grid:{color:'rgba(255,255,255,0.05)'}},x:{ticks:{color:'#666',font:{size:11}},grid:{display:false}}}}});
+var vals=sorted.map(function(d){return parseFloat(d.pnl)||0;});
+new Chart(document.getElementById('dc'),{type:'bar',data:{labels:labels.length?labels:['—'],datasets:[{data:vals.length?vals:[0],backgroundColor:vals.map(function(v){return v>=0?'#1D9E75':'#E24B4A';}),borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return'$'+v.toFixed(0);},color:'#666',font:{size:11}},grid:{color:'rgba(255,255,255,0.05)'}},x:{ticks:{color:'#666',font:{size:11}},grid:{display:false}}}}});
+var tb=document.getElementById('tb');
+if(!j.recentTrades.length){tb.innerHTML='<div style="text-align:center;color:#666;padding:20px;font-size:13px">No trades yet.</div>';}
+else{tb.innerHTML=j.recentTrades.map(function(t){var ts=new Date(t.ts);var tm=ts.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});var tp=parseFloat(t.pnl)||0;var ps=t.result==='open'?'<span style="color:#666">open</span>':'<span style="color:'+(tp>=0?'#1D9E75':'#E24B4A')+';font-weight:500">'+(tp>=0?'+':'')+'$'+tp.toFixed(2)+'</span>';var bg=t.result==='win'?'<span class="badge bw">Win</span>':t.result==='loss'?'<span class="badge bl">Loss</span>':'<span class="badge bo">Open</span>';return'<div class="tr"><span style="color:#666">'+tm+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+bg+ps+'<span style="color:#666">$'+(parseFloat(t.strike)||0).toFixed(0)+' '+(t.expiry||'')+'</span></div>';}).join('');}
+var days=j.dailyStats.length;
+var checks=[{l:'14 trading days complete',m:days>=14,v:days+'/14 days'},{l:'Win rate above 50%',m:wr>=50,v:j.totalTrades>0?wr.toFixed(1)+'%':'—'},{l:'Profit factor above 1.5',m:pf>=1.5,v:pf>0?pf.toFixed(2):'—'},{l:'At least 20 trades taken',m:j.totalTrades>=20,v:j.totalTrades+' trades'}];
+document.getElementById('rb').innerHTML=checks.map(function(c){return'<div class="rr"><span style="font-size:13px">'+c.l+'</span><div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:#666">'+c.v+'</span><span class="badge '+(c.m?'bw':'bo')+'">'+(c.m?'Pass':'Pending')+'</span></div></div>';}).join('');
+if(checks.every(function(c){return c.m;}))document.getElementById('gl').style.display='block';
+<\/script>
+</body>
+</html>`;
+    res.send(html);
+  } catch(e) { res.status(500).send('Dashboard error: ' + e.message); }
+});
+
 app.get('/', function(req, res) { res.sendFile(__dirname + '/public/index.html'); });
 
 var PORT = process.env.PORT || 3001;
