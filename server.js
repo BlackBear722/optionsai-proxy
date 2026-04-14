@@ -771,8 +771,8 @@ async function runEngine() {
     return;
   }
 
-  var inMorning   = midE >= 0   && midE <= 90;   // 9:30am–11:00am
-  var inAfternoon = midE >= 300 && midE <= 390;  // 2:30pm–4:00pm
+  var inMorning   = midE >= 0   && midE <= 390;  // 9:30am–4:00pm (full day)
+  var inAfternoon = false;
   if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
     // Convert midE back to clock time for the log message
     var dispTotal = 570 + midE; // 570 = 9*60+30, so dispTotal = minutes since midnight
