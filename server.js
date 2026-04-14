@@ -422,8 +422,8 @@ async function getSPYTrend(session) {
   var price = closes[closes.length - 1];
   var diffPct = ((price - ma9) / ma9) * 100;
 
-  // Require at least 0.1% above/below MA to call a trend — avoids noise
-  var trend = diffPct > 0.1 ? 'UP' : diffPct < -0.1 ? 'DOWN' : 'FLAT';
+  // Require at least 0.05% above/below MA to call a trend — avoids noise
+  var trend = diffPct > 0.05 ? 'UP' : diffPct < -0.05 ? 'DOWN' : 'FLAT';
 
   console.log('SPY trend: ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
   spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
