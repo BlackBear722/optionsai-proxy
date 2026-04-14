@@ -363,6 +363,9 @@ async function getSPYTrend(session) {
   // Return cached result if less than 5 minutes old
   if (Date.now() - spyTrendCache.ts < 5 * 60 * 1000) return spyTrendCache;
 
+  var closes = [];
+
+  // ── Try Tradier timesales first (works on live, not sandbox) ────────────────
   try {
     var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
     var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -373,38 +376,58 @@ async function getSPYTrend(session) {
     });
     var data = await r.json();
     var series = data && data.series && data.series.data;
-    if (!series) {
-      console.log('SPY trend: no candle data');
-      spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: 0 };
-      return spyTrendCache;
+    if (series) {
+      var candles = Array.isArray(series) ? series : [series];
+      closes = candles.map(function(c) { return parseFloat(c.close); }).filter(function(v) { return !isNaN(v); });
+      console.log('SPY trend: got ' + closes.length + ' candles from Tradier');
+    } else {
+      console.log('SPY trend: no Tradier timesales data — trying Yahoo fallback');
     }
-
-    var candles = Array.isArray(series) ? series : [series];
-    var closes = candles.map(function(c) { return parseFloat(c.close); }).filter(function(v) { return !isNaN(v); });
-
-    if (closes.length < 9) {
-      console.log('SPY trend: not enough candles yet (' + closes.length + ')');
-      spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: closes[closes.length-1] || 0 };
-      return spyTrendCache;
-    }
-
-    // 9-period simple moving average of the last 9 closes
-    var last9 = closes.slice(-9);
-    var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
-    var price = closes[closes.length - 1];
-    var diffPct = ((price - ma9) / ma9) * 100;
-
-    // Require at least 0.1% above/below MA to call a trend — avoids noise
-    var trend = diffPct > 0.1 ? 'UP' : diffPct < -0.1 ? 'DOWN' : 'FLAT';
-
-    console.log('SPY trend: ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
-    spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
-    return spyTrendCache;
   } catch(e) {
-    console.error('SPY trend error:', e.message);
-    spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: 0 };
+    console.error('SPY trend Tradier error:', e.message + ' — trying Yahoo fallback');
+  }
+
+  // ── Yahoo Finance fallback (works for sandbox / paper trading) ──────────────
+  if (closes.length < 9) {
+    try {
+      var r2 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=5m&range=1d', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          'Accept': 'application/json',
+          'Referer': 'https://finance.yahoo.com/'
+        }
+      });
+      var data2 = await r2.json();
+      var res2 = data2 && data2.chart && data2.chart.result && data2.chart.result[0];
+      var q2 = res2 && res2.indicators && res2.indicators.quote && res2.indicators.quote[0];
+      if (q2 && q2.close) {
+        closes = q2.close.filter(function(v) { return v != null && !isNaN(v); });
+        console.log('SPY trend: got ' + closes.length + ' candles from Yahoo fallback');
+      }
+    } catch(e2) {
+      console.error('SPY trend Yahoo fallback error:', e2.message);
+    }
+  }
+
+  // ── Calculate trend from closes ─────────────────────────────────────────────
+  if (closes.length < 9) {
+    console.log('SPY trend: not enough candles yet (' + closes.length + ')');
+    spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: closes[closes.length-1] || 0 };
     return spyTrendCache;
   }
+
+  // 9-period simple moving average of the last 9 closes
+  var last9 = closes.slice(-9);
+  var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
+  var price = closes[closes.length - 1];
+  var diffPct = ((price - ma9) / ma9) * 100;
+
+  // Require at least 0.1% above/below MA to call a trend — avoids noise
+  var trend = diffPct > 0.1 ? 'UP' : diffPct < -0.1 ? 'DOWN' : 'FLAT';
+
+  console.log('SPY trend: ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
+  spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
+  return spyTrendCache;
 }
 
 // ── Earnings blackout ────────────────────────────────────────────────────────
