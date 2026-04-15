@@ -597,7 +597,7 @@ async function scanTicker(ticker, settings, marketTrend) {
   }
 
   // 3. Flat market — no intraday movement, no signal
-  if (Math.abs(chg) < 0.3) {
+  if (Math.abs(chg) < 0.15) {
     await addLog('skip', ticker + ' flat ' + chg + '% change — skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'flat market', d: d };
   }
@@ -613,7 +613,7 @@ async function scanTicker(ticker, settings, marketTrend) {
   var currentPrice = parseFloat(d.price);
   if (lastPrice) {
     var priceDeltaPct = Math.abs((currentPrice - lastPrice) / lastPrice * 100);
-    if (priceDeltaPct < 0.4) {
+    if (priceDeltaPct < 0.2) {
       await addLog('skip', ticker + ' price unchanged (' + priceDeltaPct.toFixed(2) + '% move) — skipping Claude');
       return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no price change', d: d };
     }
