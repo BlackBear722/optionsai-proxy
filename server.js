@@ -352,7 +352,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use supply & demand zone theory, RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nSUPPLY & DEMAND RULES:\n- A demand zone forms when price made a sharp, fast move UP from a tight base (1-3 small candles). The base candles mark the zone.\n- A supply zone forms when price made a sharp, fast move DOWN from a tight base. The base candles mark the zone.\n- FRESH zones (never retested) are strongest. Avoid zones price has already visited multiple times.\n- A zone is CONFIRMED when: price returns to the zone AND shows a rejection wick, engulfing candle, or tight consolidation before moving back in the original direction.\n- A zone is BROKEN (skip it) when price closes through it without reacting.\n- Intraday high approximates a recent supply zone. Intraday low approximates a recent demand zone.\n- Price near intraday low + bullish candle reaction = demand zone bounce = stronger BUY_CALL setup.\n- Price near intraday high + bearish candle reaction = supply zone rejection = stronger BUY_PUT setup.\n\nENTRY RULES:\n- BUY_CALL: RSI 50-65, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP, AND price bouncing from demand zone or breaking above supply-turned-demand\n- BUY_PUT: RSI 35-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN, AND price rejecting from supply zone or breaking below demand-turned-supply\n- HIGH confidence: ALL conditions clearly met including zone confirmation\n- MEDIUM confidence: most conditions met but zone reaction weak or one indicator borderline — prefer NONE over MEDIUM when trend is weak\n- LOW or NONE: mixed signals, trend disagreement, RSI overbought/oversold, no clear zone, or zone already heavily tested\n\nRISK RULES:\n- Never enter if price is mid-range between zones with no clear direction\n- Never enter if price already ran far from the zone (chasing)\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason including zone context"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot using supply & demand zone retest strategy on 5-minute candles.\n\nZONE IDENTIFICATION:\n- Demand zone: area where price made a sharp fast move UP from a tight base (1-3 small candles). Base candle high/low = zone boundaries.\n- Supply zone: area where price made a sharp fast move DOWN from a tight base. Base candle high/low = zone boundaries.\n- Use the provided demand zone top/bottom and supply zone top/bottom in your analysis.\n\nENTRY RULES (strict — both must be true):\n1. RETEST: price has returned to within the zone boundaries\n2. CONFIRMATION: the current candle has CLOSED outside the zone in the original direction\n   - Demand zone retest → candle closes ABOVE zone top = BUY_CALL\n   - Supply zone retest → candle closes BELOW zone bottom = BUY_PUT\n\nADDITIONAL FILTERS:\n- RSI must be 35-65 (not overbought or oversold)\n- Volume ratio must be above 0.8x average (real participation)\n- Market trend must align (UP for calls, DOWN for puts)\n- Do NOT enter if price closed inside the zone (no confirmation)\n- Do NOT enter if zone has been retested more than 2 times already\n- Do NOT enter if price is far from zone (already moved away)\n\nCONFIDENCE:\n- HIGH: zone confirmed, candle closed cleanly outside, RSI neutral, volume strong, trend aligned\n- NONE: any condition not met — do not force a trade\n\nRISK:\n- Profit target is tight ($0.30/contract) — this is a quick scalp off the zone\n- Strike = nearest whole dollar to current price\n- Premium = 0.3 to 1.5 percent of stock price\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.20,"reason":"brief reason referencing zone retest confirmation"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -561,6 +561,129 @@ async function hasEarningsSoon(ticker) {
   }
 }
 
+
+// ── Supply & Demand Zone Detection ───────────────────────────────────────────
+// Scans last 20 five-minute candles to identify demand and supply zones.
+// A zone forms where price made a sharp move away from a tight base (1-3 candles).
+// Returns the most relevant demand zone and supply zone for the current price.
+function detectZones(candles, currentPrice) {
+  if (!candles || candles.length < 5) return { demand: null, supply: null };
+
+  var zones = [];
+
+  for (var i = 1; i < candles.length - 1; i++) {
+    var prev  = candles[i - 1];
+    var base  = candles[i];
+    var next  = candles[i + 1];
+
+    var baseRange  = Math.abs(parseFloat(base.high)  - parseFloat(base.low));
+    var prevRange  = Math.abs(parseFloat(prev.high)  - parseFloat(prev.low));
+    var nextRange  = Math.abs(parseFloat(next.high)  - parseFloat(next.low));
+    var baseClose  = parseFloat(base.close);
+    var baseOpen   = parseFloat(base.open);
+    var baseHigh   = parseFloat(base.high);
+    var baseLow    = parseFloat(base.low);
+    var nextClose  = parseFloat(next.close);
+    var nextOpen   = parseFloat(next.open);
+    var nextMove   = Math.abs(nextClose - nextOpen);
+
+    // Base candle must be small (tight consolidation)
+    if (baseRange === 0) continue;
+    var isSmallBase = baseRange < prevRange * 0.7;
+    if (!isSmallBase) continue;
+
+    // Next candle must be a sharp move (at least 1.5x the base range)
+    if (nextMove < baseRange * 1.5) continue;
+
+    if (nextClose > nextOpen && nextClose > baseHigh) {
+      // Sharp move UP → demand zone (base candle is the zone)
+      zones.push({ type: 'demand', top: baseHigh, bottom: baseLow, index: i, tested: 0 });
+    } else if (nextClose < nextOpen && nextClose < baseLow) {
+      // Sharp move DOWN → supply zone (base candle is the zone)
+      zones.push({ type: 'supply', top: baseHigh, bottom: baseLow, index: i, tested: 0 });
+    }
+  }
+
+  // Count how many times each zone has been retested by subsequent candles
+  zones.forEach(function(z) {
+    for (var j = z.index + 2; j < candles.length; j++) {
+      var c = candles[j];
+      var h = parseFloat(c.high);
+      var l = parseFloat(c.low);
+      if (l <= z.top && h >= z.bottom) z.tested++;
+    }
+  });
+
+  // Find the most relevant demand zone (below current price, freshest)
+  var demandZones = zones.filter(function(z) {
+    return z.type === 'demand' && z.top < currentPrice && z.tested <= 2;
+  }).sort(function(a, b) {
+    // Prefer zones closest to current price and least tested
+    var distA = currentPrice - a.top;
+    var distB = currentPrice - b.top;
+    return (distA + a.tested * 5) - (distB + b.tested * 5);
+  });
+
+  // Find the most relevant supply zone (above current price, freshest)
+  var supplyZones = zones.filter(function(z) {
+    return z.type === 'supply' && z.bottom > currentPrice && z.tested <= 2;
+  }).sort(function(a, b) {
+    var distA = a.bottom - currentPrice;
+    var distB = b.bottom - currentPrice;
+    return (distA + a.tested * 5) - (distB + b.tested * 5);
+  });
+
+  return {
+    demand: demandZones.length > 0 ? demandZones[0] : null,
+    supply: supplyZones.length > 0 ? supplyZones[0] : null
+  };
+}
+
+// Check if current price is retesting a zone and if the last candle confirmed exit
+function checkZoneRetest(zones, candles, currentPrice) {
+  if (!candles || candles.length < 2) return { signal: 'NONE', zone: null, reason: 'not enough candles' };
+
+  var lastCandle = candles[candles.length - 1];
+  var lastClose  = parseFloat(lastCandle.close);
+  var lastOpen   = parseFloat(lastCandle.open);
+  var lastHigh   = parseFloat(lastCandle.high);
+  var lastLow    = parseFloat(lastCandle.low);
+
+  // Check demand zone retest — price entered zone and last candle closed above zone top
+  if (zones.demand) {
+    var dz = zones.demand;
+    var priceEnteredZone = lastLow <= dz.top && lastHigh >= dz.bottom;
+    var candleClosedAbove = lastClose > dz.top;
+    var bullishCandle = lastClose > lastOpen;
+
+    if (priceEnteredZone && candleClosedAbove && bullishCandle) {
+      return {
+        signal: 'BUY_CALL',
+        zone: dz,
+        reason: 'Demand zone retest confirmed: candle entered zone (' + dz.bottom.toFixed(2) + '-' + dz.top.toFixed(2) + ') and closed above at $' + lastClose.toFixed(2) + ' (tested ' + dz.tested + 'x)'
+      };
+    }
+  }
+
+  // Check supply zone retest — price entered zone and last candle closed below zone bottom
+  if (zones.supply) {
+    var sz = zones.supply;
+    var priceEnteredZoneS = lastHigh >= sz.bottom && lastLow <= sz.top;
+    var candleClosedBelow = lastClose < sz.bottom;
+    var bearishCandle = lastClose < lastOpen;
+
+    if (priceEnteredZoneS && candleClosedBelow && bearishCandle) {
+      return {
+        signal: 'BUY_PUT',
+        zone: sz,
+        reason: 'Supply zone retest confirmed: candle entered zone (' + sz.bottom.toFixed(2) + '-' + sz.top.toFixed(2) + ') and closed below at $' + lastClose.toFixed(2) + ' (tested ' + sz.tested + 'x)'
+      };
+    }
+  }
+
+  return { signal: 'NONE', zone: null, reason: 'no zone retest confirmation' };
+}
+
 // Last known price cache for change-threshold pre-filter: { ticker: lastPrice }
 var lastScanPrice = {};
 
@@ -620,11 +743,55 @@ async function scanTicker(ticker, settings, marketTrend) {
   }
   lastScanPrice[ticker] = currentPrice;
 
+  // ── Zone detection — identify supply & demand zones from 5-min candles ────
+  var session2 = await getState('session', null);
+  var zones = { demand: null, supply: null };
+  var zoneRetest = { signal: 'NONE', zone: null, reason: 'no zones detected' };
+  var rawCandles = [];
+  try {
+    if (session2 && session2.token) {
+      var etNowZ = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      var dateStrZ = etNowZ.getFullYear() + '-' + ('0'+(etNowZ.getMonth()+1)).slice(-2) + '-' + ('0'+etNowZ.getDate()).slice(-2);
+      var baseZ = session2.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+      var zr = await fetch(baseZ + '/markets/timesales?symbol=' + ticker + '&interval=5min&start=' + dateStrZ + '%2009:30&session_filter=open', {
+        headers: { 'Authorization': 'Bearer ' + session2.token, 'Accept': 'application/json' }
+      });
+      var zdata = await zr.json();
+      var zseries = zdata && zdata.series && zdata.series.data;
+      if (zseries) rawCandles = Array.isArray(zseries) ? zseries : [zseries];
+    }
+    // Yahoo fallback for candles
+    if (rawCandles.length < 5) {
+      var yr = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=1d', {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+      });
+      var ydata = await yr.json();
+      var yres = ydata && ydata.chart && ydata.chart.result && ydata.chart.result[0];
+      var yq = yres && yres.indicators && yres.indicators.quote && yres.indicators.quote[0];
+      if (yq && yq.close) {
+        rawCandles = yq.close.map(function(c, i) {
+          return { close: yq.close[i], open: yq.open && yq.open[i], high: yq.high && yq.high[i], low: yq.low && yq.low[i] };
+        }).filter(function(c) { return c.close != null && c.open != null; });
+      }
+    }
+    if (rawCandles.length >= 5) {
+      zones = detectZones(rawCandles, currentPrice);
+      zoneRetest = checkZoneRetest(zones, rawCandles, currentPrice);
+      console.log(ticker + ' zones: demand=' + (zones.demand ? zones.demand.bottom.toFixed(2)+'-'+zones.demand.top.toFixed(2) : 'none') + ' supply=' + (zones.supply ? zones.supply.bottom.toFixed(2)+'-'+zones.supply.top.toFixed(2) : 'none'));
+      if (zoneRetest.signal !== 'NONE') {
+        await addLog('entry', ticker + ' zone retest detected: ' + zoneRetest.signal + ' — ' + zoneRetest.reason);
+      }
+    }
+  } catch(ze) { console.error('zone detection error ' + ticker + ':', ze.message); }
+
   // ── Passed all filters — call Claude ────────────────────────────────────
   await addLog('entry', 'scanning ' + ticker + ' $' + d.price + ' (' + d.changePct + '%) RSI:' + d.rsi + ' vol:' + volR + 'x src:' + d.source);
 
   try {
     var priceVsVwap = currentPrice > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
+    var demandZoneStr = zones.demand ? ('$' + zones.demand.bottom.toFixed(2) + ' – $' + zones.demand.top.toFixed(2) + ' (tested ' + zones.demand.tested + 'x)') : 'none identified';
+    var supplyZoneStr = zones.supply ? ('$' + zones.supply.bottom.toFixed(2) + ' – $' + zones.supply.top.toFixed(2) + ' (tested ' + zones.supply.tested + 'x)') : 'none identified';
+    var retestStr = zoneRetest.signal !== 'NONE' ? ('YES — ' + zoneRetest.reason) : ('No — ' + zoneRetest.reason);
     var userMsg = 'Ticker: ' + ticker +
       '\nMarket trend (SPY vs 9MA): ' + (marketTrend || 'UNKNOWN') +
       '\nPrice: $' + d.price + ' | Change: ' + d.changePct + '% today' +
@@ -634,7 +801,11 @@ async function scanTicker(ticker, settings, marketTrend) {
       '\nConsecutive bull candles: ' + d.consecutiveBull + ' | bear candles: ' + d.consecutiveBear +
       '\nVolume ratio vs avg: ' + d.volumeRatio + 'x' +
       '\nBid: $' + (d.bid||'?') + ' | Ask: $' + (d.ask||'?') + ' | Spread: ' + d.spreadEstPct + '%' +
-      '\nProfit target: $' + settings.profitTarget + '/contract | Stop-loss: $' + settings.stopLoss + '/contract' +
+      '\n\nSUPPLY & DEMAND ZONES (5-min candles):' +
+      '\nDemand zone: ' + demandZoneStr +
+      '\nSupply zone: ' + supplyZoneStr +
+      '\nZone retest confirmation: ' + retestStr +
+      '\n\nProfit target: $' + settings.profitTarget + '/contract | Stop-loss: $' + settings.stopLoss + '/contract' +
       '\n\nRespond ONLY with a <SCAN_RESULT> block.';
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) { await addLog('stop', 'No ANTHROPIC_API_KEY'); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no api key' }; }
