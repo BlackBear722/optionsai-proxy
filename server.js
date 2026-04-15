@@ -355,22 +355,69 @@ var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use supply & demand zone theory, RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nSUPPLY & DEMAND RULES:\n- A demand zone forms when price made a sharp, fast move UP from a tight base (1-3 small candles). The base candles mark the zone.\n- A supply zone forms when price made a sharp, fast move DOWN from a tight base. The base candles mark the zone.\n- FRESH zones (never retested) are strongest. Avoid zones price has already visited multiple times.\n- A zone is CONFIRMED when: price returns to the zone AND shows a rejection wick, engulfing candle, or tight consolidation before moving back in the original direction.\n- A zone is BROKEN (skip it) when price closes through it without reacting.\n- Intraday high approximates a recent supply zone. Intraday low approximates a recent demand zone.\n- Price near intraday low + bullish candle reaction = demand zone bounce = stronger BUY_CALL setup.\n- Price near intraday high + bearish candle reaction = supply zone rejection = stronger BUY_PUT setup.\n\nENTRY RULES:\n- BUY_CALL: RSI 50-65, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP, AND price bouncing from demand zone or breaking above supply-turned-demand\n- BUY_PUT: RSI 35-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN, AND price rejecting from supply zone or breaking below demand-turned-supply\n- HIGH confidence: ALL conditions clearly met including zone confirmation\n- MEDIUM confidence: most conditions met but zone reaction weak or one indicator borderline — prefer NONE over MEDIUM when trend is weak\n- LOW or NONE: mixed signals, trend disagreement, RSI overbought/oversold, no clear zone, or zone already heavily tested\n\nRISK RULES:\n- Never enter if price is mid-range between zones with no clear direction\n- Never enter if price already ran far from the zone (chasing)\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason including zone context"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
-// Fetches SPY 5-min candles and calculates 9-period MA to determine market trend.
-// Returns 'UP', 'DOWN', or 'FLAT'. Cached for 5 minutes to avoid excess API calls.
+// Three-stage trend detection:
+//   Stage 1: Pre-market  → fetch 4am-9:30am candles, record highest wick + lowest wick
+//   Stage 2: Market open → first candle close vs premarket high/low for directional bias
+//   Stage 3: After 9 candles → full MA9 calculation
 var spyTrendCache = { trend: 'FLAT', ts: 0, ma9: 0, price: 0 };
+var premarketCache = { date: null, high: 0, low: 0, prevClose: 0 };
+
+async function fetchPremarket() {
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var todayStr = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
+  if (premarketCache.date === todayStr && premarketCache.high > 0) return premarketCache;
+
+  try {
+    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=5m&range=1d&prePost=true', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+    });
+    var data = await r.json();
+    var res = data && data.chart && data.chart.result && data.chart.result[0];
+    var meta = res && res.meta;
+    var q = res && res.indicators && res.indicators.quote && res.indicators.quote[0];
+    var timestamps = res && res.timestamp;
+    if (!q || !timestamps) { console.log('Premarket: no Yahoo data'); return premarketCache; }
+
+    var prevClose = meta && meta.previousClose ? parseFloat(meta.previousClose) : 0;
+    var marketOpenUTC = new Date(todayStr + 'T13:30:00Z').getTime() / 1000;
+    var pmHighs = [], pmLows = [];
+    for (var i = 0; i < timestamps.length; i++) {
+      if (timestamps[i] < marketOpenUTC) {
+        var h = parseFloat(q.high && q.high[i]);
+        var l = parseFloat(q.low && q.low[i]);
+        if (!isNaN(h) && h > 0) pmHighs.push(h);
+        if (!isNaN(l) && l > 0) pmLows.push(l);
+      }
+    }
+    if (!pmHighs.length) { console.log('Premarket: no candles yet'); return premarketCache; }
+
+    var pmHigh = Math.max.apply(null, pmHighs);
+    var pmLow  = Math.min.apply(null, pmLows);
+    console.log('Premarket SPY: high=$' + pmHigh.toFixed(2) + ' low=$' + pmLow.toFixed(2) + ' prevClose=$' + (prevClose||0).toFixed(2));
+    premarketCache = { date: todayStr, high: pmHigh, low: pmLow, prevClose: prevClose };
+    return premarketCache;
+  } catch(e) {
+    console.error('Premarket fetch error:', e.message);
+    return premarketCache;
+  }
+}
 
 async function getSPYTrend(session) {
-  // Return cached result if less than 5 minutes old
-  if (Date.now() - spyTrendCache.ts < 5 * 60 * 1000) return spyTrendCache;
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var midE = etNow.getHours() * 60 + etNow.getMinutes() - (9 * 60 + 30);
 
-  var closes = [];
+  // Cache: 1 min during early open (first 50 min), 5 min once MA9 is reliable
+  var cacheMs = midE < 50 ? 60 * 1000 : 5 * 60 * 1000;
+  if (Date.now() - spyTrendCache.ts < cacheMs) return spyTrendCache;
 
-  // ── Try Tradier timesales first (works on live, not sandbox) ────────────────
+  var pm = await fetchPremarket();
+
+  var closes = [], highs = [], lows = [];
+
+  // ── Try Tradier first ────────────────────────────────────────────────────────
   try {
     var base = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
-    var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     var dateStr = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
-
     var r = await fetch(base + '/markets/timesales?symbol=SPY&interval=5min&start=' + dateStr + '%2009:30&session_filter=open', {
       headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
     });
@@ -379,54 +426,89 @@ async function getSPYTrend(session) {
     if (series) {
       var candles = Array.isArray(series) ? series : [series];
       closes = candles.map(function(c) { return parseFloat(c.close); }).filter(function(v) { return !isNaN(v); });
+      highs  = candles.map(function(c) { return parseFloat(c.high);  }).filter(function(v) { return !isNaN(v); });
+      lows   = candles.map(function(c) { return parseFloat(c.low);   }).filter(function(v) { return !isNaN(v); });
       console.log('SPY trend: got ' + closes.length + ' candles from Tradier');
     } else {
-      console.log('SPY trend: no Tradier timesales data — trying Yahoo fallback');
+      console.log('SPY trend: no Tradier data — trying Yahoo');
     }
-  } catch(e) {
-    console.error('SPY trend Tradier error:', e.message + ' — trying Yahoo fallback');
-  }
+  } catch(e) { console.error('SPY Tradier error:', e.message); }
 
-  // ── Yahoo Finance fallback (works for sandbox / paper trading) ──────────────
-  if (closes.length < 9) {
+  // ── Yahoo fallback ───────────────────────────────────────────────────────────
+  if (closes.length < 1) {
     try {
       var r2 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=5m&range=1d', {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': 'application/json',
-          'Referer': 'https://finance.yahoo.com/'
-        }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
       });
       var data2 = await r2.json();
       var res2 = data2 && data2.chart && data2.chart.result && data2.chart.result[0];
       var q2 = res2 && res2.indicators && res2.indicators.quote && res2.indicators.quote[0];
       if (q2 && q2.close) {
         closes = q2.close.filter(function(v) { return v != null && !isNaN(v); });
-        console.log('SPY trend: got ' + closes.length + ' candles from Yahoo fallback');
+        highs  = (q2.high || []).filter(function(v) { return v != null && !isNaN(v); });
+        lows   = (q2.low  || []).filter(function(v) { return v != null && !isNaN(v); });
+        console.log('SPY trend: got ' + closes.length + ' candles from Yahoo');
       }
-    } catch(e2) {
-      console.error('SPY trend Yahoo fallback error:', e2.message);
-    }
+    } catch(e2) { console.error('SPY Yahoo error:', e2.message); }
   }
 
-  // ── Calculate trend from closes ─────────────────────────────────────────────
-  if (closes.length < 9) {
-    console.log('SPY trend: not enough candles yet (' + closes.length + ')');
-    spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: closes[closes.length-1] || 0 };
+  var price = closes.length > 0 ? closes[closes.length - 1] : 0;
+
+  // ── Stage 3: MA9 — primary once 9+ candles available ────────────────────────
+  if (closes.length >= 9) {
+    var last9 = closes.slice(-9);
+    var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
+    var diffPct = ((price - ma9) / ma9) * 100;
+    var trend = diffPct > 0.05 ? 'UP' : diffPct < -0.05 ? 'DOWN' : 'FLAT';
+    console.log('SPY trend (MA9): ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
+    spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
     return spyTrendCache;
   }
 
-  // 9-period simple moving average of the last 9 closes
-  var last9 = closes.slice(-9);
-  var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
-  var price = closes[closes.length - 1];
-  var diffPct = ((price - ma9) / ma9) * 100;
+  // ── Stage 2: Premarket breakout — used at market open (1-8 candles) ──────────
+  if (closes.length >= 1 && pm.high > 0 && pm.low > 0) {
+    var firstClose = closes[0];
+    var lastClose  = closes[closes.length - 1];
+    var trend2, reason2;
+    if (lastClose > pm.high) {
+      trend2 = 'UP'; reason2 = 'broke above premarket high $' + pm.high.toFixed(2);
+    } else if (lastClose < pm.low) {
+      trend2 = 'DOWN'; reason2 = 'broke below premarket low $' + pm.low.toFixed(2);
+    } else if (firstClose > pm.high) {
+      trend2 = 'UP'; reason2 = 'opened above premarket high $' + pm.high.toFixed(2);
+    } else if (firstClose < pm.low) {
+      trend2 = 'DOWN'; reason2 = 'opened below premarket low $' + pm.low.toFixed(2);
+    } else {
+      var prevClose = pm.prevClose || price;
+      var dayChgPct = prevClose > 0 ? ((price - prevClose) / prevClose * 100) : 0;
+      trend2 = dayChgPct > 0.3 ? 'UP' : dayChgPct < -0.3 ? 'DOWN' : 'FLAT';
+      reason2 = 'inside premarket range, day chg ' + dayChgPct.toFixed(2) + '%';
+    }
+    console.log('SPY trend (premarket breakout ' + closes.length + ' candles): ' + trend2 + ' — ' + reason2);
+    spyTrendCache = { trend: trend2, ts: Date.now(), ma9: pm.high, price: price };
+    return spyTrendCache;
+  }
 
-  // Require at least 0.05% above/below MA to call a trend — avoids noise
-  var trend = diffPct > 0.05 ? 'UP' : diffPct < -0.05 ? 'DOWN' : 'FLAT';
+  // ── Stage 1: Day change fallback — very early, no candles yet ────────────────
+  if (price > 0) {
+    try {
+      var r3 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d', {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+      });
+      var data3 = await r3.json();
+      var meta3 = data3 && data3.chart && data3.chart.result && data3.chart.result[0] && data3.chart.result[0].meta;
+      var prev3 = (meta3 && (meta3.previousClose || meta3.chartPreviousClose)) || price;
+      var chg3 = ((price - prev3) / prev3 * 100);
+      var trend3 = chg3 > 0.3 ? 'UP' : chg3 < -0.3 ? 'DOWN' : 'FLAT';
+      console.log('SPY trend (day chg fallback): ' + trend3 + ' chg=' + chg3.toFixed(2) + '%');
+      spyTrendCache = { trend: trend3, ts: Date.now(), ma9: prev3, price: price };
+      return spyTrendCache;
+    } catch(e3) { console.error('SPY day chg fallback error:', e3.message); }
+  }
 
-  console.log('SPY trend: ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
-  spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
+  // ── No data at all ────────────────────────────────────────────────────────────
+  console.log('SPY trend: no data — defaulting FLAT');
+  spyTrendCache = { trend: 'FLAT', ts: Date.now(), ma9: 0, price: 0 };
   return spyTrendCache;
 }
 
