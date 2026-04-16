@@ -1002,6 +1002,20 @@ async function runEngine() {
   var totalMinutes = etNowE.getHours() * 60 + etNowE.getMinutes(); // minutes since midnight ET
   var midE = totalMinutes - (9 * 60 + 30); // minutes since 9:30am ET
 
+  // Pre-market check — do nothing before 9:30am ET, silently prefetch premarket levels
+  if (midE < 0) {
+    var etH = etNowE.getHours();
+    var etM = ('0' + etNowE.getMinutes()).slice(-2);
+    var etAmPm = etH >= 12 ? 'PM' : 'AM';
+    var et12 = (etH > 12 ? etH - 12 : (etH === 0 ? 12 : etH)) + ':' + etM + ' ' + etAmPm;
+    var preSession = await getState('session', null);
+    if (preSession) fetchPremarket().catch(function(e) { console.error('pre-market prefetch error:', e.message); });
+    if (etNowE.getMinutes() % 15 === 0) {
+      await addLog('skip', '🌅 Pre-market (' + et12 + ' ET) — market opens at 9:30am, premarket levels loading');
+    }
+    return;
+  }
+
   // Market holiday / early close check
   var holidayInfo = await checkMarketHoliday();
   if (holidayInfo.isHoliday) {
