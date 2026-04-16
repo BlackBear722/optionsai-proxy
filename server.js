@@ -352,7 +352,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot using supply & demand zone retest strategy on 5-minute candles.\n\nZONE IDENTIFICATION:\n- Demand zone: area where price made a sharp fast move UP from a tight base (1-3 small candles). Base candle high/low = zone boundaries.\n- Supply zone: area where price made a sharp fast move DOWN from a tight base. Base candle high/low = zone boundaries.\n- Use the provided demand zone top/bottom and supply zone top/bottom in your analysis.\n\nENTRY RULES (strict — both must be true):\n1. RETEST: price has returned to within the zone boundaries\n2. CONFIRMATION: the current candle has CLOSED outside the zone in the original direction\n   - Demand zone retest → candle closes ABOVE zone top = BUY_CALL\n   - Supply zone retest → candle closes BELOW zone bottom = BUY_PUT\n\nADDITIONAL FILTERS:\n- RSI must be 35-65 (not overbought or oversold)\n- Volume ratio must be above 0.8x average (real participation)\n- Market trend must align (UP for calls, DOWN for puts)\n- Do NOT enter if price closed inside the zone (no confirmation)\n- Do NOT enter if zone has been retested more than 2 times already\n- Do NOT enter if price is far from zone (already moved away)\n\nCONFIDENCE:\n- HIGH: zone confirmed, candle closed cleanly outside, RSI neutral, volume strong, trend aligned\n- NONE: any condition not met — do not force a trade\n\nRISK:\n- Profit target is tight ($0.30/contract) — this is a quick scalp off the zone\n- Strike = nearest whole dollar to current price\n- Premium = 0.3 to 1.5 percent of stock price\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.20,"reason":"brief reason referencing zone retest confirmation"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 50-65, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend is UP\n- BUY_PUT: RSI 35-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend is DOWN\n- HIGH confidence: ALL conditions clearly met\n- MEDIUM confidence: most conditions met but one is borderline — prefer NONE over MEDIUM when trend is weak\n- LOW or NONE: any mixed signals, trend disagreement, or RSI overbought/oversold\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -719,8 +719,11 @@ async function scanTicker(ticker, settings, marketTrend) {
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'wide spread', d: d };
   }
 
-  // 3. Day change filter removed — zone retest strategy does not require intraday momentum
-  // Zones are level-based entries that work regardless of day change %
+  // 3. Flat market — no intraday movement, no signal
+  if (Math.abs(chg) < 0.15) {
+    await addLog('skip', ticker + ' flat ' + chg + '% change — skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'flat market', d: d };
+  }
 
   // 4. Low volume — no real momentum behind the move
   if (volR < 0.7) {
@@ -740,55 +743,11 @@ async function scanTicker(ticker, settings, marketTrend) {
   }
   lastScanPrice[ticker] = currentPrice;
 
-  // ── Zone detection — identify supply & demand zones from 5-min candles ────
-  var session2 = await getState('session', null);
-  var zones = { demand: null, supply: null };
-  var zoneRetest = { signal: 'NONE', zone: null, reason: 'no zones detected' };
-  var rawCandles = [];
-  try {
-    if (session2 && session2.token) {
-      var etNowZ = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      var dateStrZ = etNowZ.getFullYear() + '-' + ('0'+(etNowZ.getMonth()+1)).slice(-2) + '-' + ('0'+etNowZ.getDate()).slice(-2);
-      var baseZ = session2.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
-      var zr = await fetch(baseZ + '/markets/timesales?symbol=' + ticker + '&interval=5min&start=' + dateStrZ + '%2009:30&session_filter=open', {
-        headers: { 'Authorization': 'Bearer ' + session2.token, 'Accept': 'application/json' }
-      });
-      var zdata = await zr.json();
-      var zseries = zdata && zdata.series && zdata.series.data;
-      if (zseries) rawCandles = Array.isArray(zseries) ? zseries : [zseries];
-    }
-    // Yahoo fallback for candles
-    if (rawCandles.length < 5) {
-      var yr = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=1d', {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
-      });
-      var ydata = await yr.json();
-      var yres = ydata && ydata.chart && ydata.chart.result && ydata.chart.result[0];
-      var yq = yres && yres.indicators && yres.indicators.quote && yres.indicators.quote[0];
-      if (yq && yq.close) {
-        rawCandles = yq.close.map(function(c, i) {
-          return { close: yq.close[i], open: yq.open && yq.open[i], high: yq.high && yq.high[i], low: yq.low && yq.low[i] };
-        }).filter(function(c) { return c.close != null && c.open != null; });
-      }
-    }
-    if (rawCandles.length >= 5) {
-      zones = detectZones(rawCandles, currentPrice);
-      zoneRetest = checkZoneRetest(zones, rawCandles, currentPrice);
-      console.log(ticker + ' zones: demand=' + (zones.demand ? zones.demand.bottom.toFixed(2)+'-'+zones.demand.top.toFixed(2) : 'none') + ' supply=' + (zones.supply ? zones.supply.bottom.toFixed(2)+'-'+zones.supply.top.toFixed(2) : 'none'));
-      if (zoneRetest.signal !== 'NONE') {
-        await addLog('entry', ticker + ' zone retest detected: ' + zoneRetest.signal + ' — ' + zoneRetest.reason);
-      }
-    }
-  } catch(ze) { console.error('zone detection error ' + ticker + ':', ze.message); }
-
   // ── Passed all filters — call Claude ────────────────────────────────────
   await addLog('entry', 'scanning ' + ticker + ' $' + d.price + ' (' + d.changePct + '%) RSI:' + d.rsi + ' vol:' + volR + 'x src:' + d.source);
 
   try {
     var priceVsVwap = currentPrice > parseFloat(d.vwap) ? 'ABOVE' : 'BELOW';
-    var demandZoneStr = zones.demand ? ('$' + zones.demand.bottom.toFixed(2) + ' – $' + zones.demand.top.toFixed(2) + ' (tested ' + zones.demand.tested + 'x)') : 'none identified';
-    var supplyZoneStr = zones.supply ? ('$' + zones.supply.bottom.toFixed(2) + ' – $' + zones.supply.top.toFixed(2) + ' (tested ' + zones.supply.tested + 'x)') : 'none identified';
-    var retestStr = zoneRetest.signal !== 'NONE' ? ('YES — ' + zoneRetest.reason) : ('No — ' + zoneRetest.reason);
     var userMsg = 'Ticker: ' + ticker +
       '\nMarket trend (SPY vs 9MA): ' + (marketTrend || 'UNKNOWN') +
       '\nPrice: $' + d.price + ' | Change: ' + d.changePct + '% today' +
@@ -798,11 +757,7 @@ async function scanTicker(ticker, settings, marketTrend) {
       '\nConsecutive bull candles: ' + d.consecutiveBull + ' | bear candles: ' + d.consecutiveBear +
       '\nVolume ratio vs avg: ' + d.volumeRatio + 'x' +
       '\nBid: $' + (d.bid||'?') + ' | Ask: $' + (d.ask||'?') + ' | Spread: ' + d.spreadEstPct + '%' +
-      '\n\nSUPPLY & DEMAND ZONES (5-min candles):' +
-      '\nDemand zone: ' + demandZoneStr +
-      '\nSupply zone: ' + supplyZoneStr +
-      '\nZone retest confirmation: ' + retestStr +
-      '\n\nProfit target: $' + settings.profitTarget + '/contract | Stop-loss: $' + settings.stopLoss + '/contract' +
+      '\nProfit target: $' + settings.profitTarget + '/contract | Stop-loss: $' + settings.stopLoss + '/contract' +
       '\n\nRespond ONLY with a <SCAN_RESULT> block.';
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) { await addLog('stop', 'No ANTHROPIC_API_KEY'); return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no api key' }; }
