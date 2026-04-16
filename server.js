@@ -233,8 +233,23 @@ async function fetchQuote(ticker) {
 
       if (q && q.last && parseFloat(q.last) > 0) {
         var price = parseFloat(q.last);
-        var prev = parseFloat(q.prevclose) || price;
-        var chgPct = prev > 0 ? ((price - prev) / prev * 100) : 0;
+        // Tradier sandbox often returns null/0 for prevclose — fall back to
+        // premarket cache prevClose, then Yahoo previous close, then price itself
+        var prev = parseFloat(q.prevclose) || 0;
+        if (prev <= 0) {
+          // Try premarket cache first (already fetched for SPY, use for others via Yahoo daily)
+          try {
+            var pcRes = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=2d', {
+              headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+            });
+            var pcData = await pcRes.json();
+            var pcMeta = pcData && pcData.chart && pcData.chart.result && pcData.chart.result[0] && pcData.chart.result[0].meta;
+            var pcVal = pcMeta && (pcMeta.previousClose || pcMeta.chartPreviousClose);
+            if (pcVal && parseFloat(pcVal) > 0) prev = parseFloat(pcVal);
+          } catch(pce) { console.error('prevclose fetch error ' + ticker + ':', pce.message); }
+        }
+        if (prev <= 0) prev = price; // last resort — avoids divide by zero
+        var chgPct = ((price - prev) / prev * 100);
         var high = parseFloat(q.high) || price;
         var low = parseFloat(q.low) || price;
         var vol = parseInt(q.volume) || 0;
