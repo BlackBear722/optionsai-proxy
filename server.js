@@ -233,23 +233,8 @@ async function fetchQuote(ticker) {
 
       if (q && q.last && parseFloat(q.last) > 0) {
         var price = parseFloat(q.last);
-        // Tradier sandbox often returns null/0 for prevclose — fall back to
-        // premarket cache prevClose, then Yahoo previous close, then price itself
-        var prev = parseFloat(q.prevclose) || 0;
-        if (prev <= 0) {
-          // Try premarket cache first (already fetched for SPY, use for others via Yahoo daily)
-          try {
-            var pcRes = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=2d', {
-              headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-            });
-            var pcData = await pcRes.json();
-            var pcMeta = pcData && pcData.chart && pcData.chart.result && pcData.chart.result[0] && pcData.chart.result[0].meta;
-            var pcVal = pcMeta && (pcMeta.previousClose || pcMeta.chartPreviousClose);
-            if (pcVal && parseFloat(pcVal) > 0) prev = parseFloat(pcVal);
-          } catch(pce) { console.error('prevclose fetch error ' + ticker + ':', pce.message); }
-        }
-        if (prev <= 0) prev = price; // last resort — avoids divide by zero
-        var chgPct = ((price - prev) / prev * 100);
+        var prev = parseFloat(q.prevclose) || price;
+        var chgPct = prev > 0 ? ((price - prev) / prev * 100) : 0;
         var high = parseFloat(q.high) || price;
         var low = parseFloat(q.low) || price;
         var vol = parseInt(q.volume) || 0;
@@ -734,11 +719,8 @@ async function scanTicker(ticker, settings, marketTrend) {
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'wide spread', d: d };
   }
 
-  // 3. Flat market — no intraday movement, no signal
-  if (Math.abs(chg) < 0.15) {
-    await addLog('skip', ticker + ' flat ' + chg + '% change — skipping Claude');
-    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'flat market', d: d };
-  }
+  // 3. Day change filter removed — zone retest strategy does not require intraday momentum
+  // Zones are level-based entries that work regardless of day change %
 
   // 4. Low volume — no real momentum behind the move
   if (volR < 0.7) {
