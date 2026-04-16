@@ -959,6 +959,130 @@ async function closePos(pos, session) {
   }, session);
 }
 
+
+// ── Dynamic Watchlist Builder ─────────────────────────────────────────────────
+// Runs once per day at market open. Keeps 2 anchor tickers (TSLA, NVDA) and
+// fills remaining 5 slots with top volume movers from Yahoo Finance screener.
+// Filters out: ETFs, leveraged/inverse funds, low-price stocks, earnings plays.
+var dynamicWatchlistCache = { date: null, tickers: [] };
+
+var ANCHOR_TICKERS   = ['TSLA', 'NVDA'];
+var DYNAMIC_SLOTS    = 5;
+var MIN_PRICE        = 50;    // options need liquid underlyings
+var MAX_PRICE        = 2000;  // avoid extremely high-priced stocks
+var BLOCKED_SUFFIXES = ['ETF','FUND','TRUST','LP','REIT'];
+var BLOCKED_TICKERS  = ['SPY','QQQ','IWM','GLD','SLV','TLT','HYG','XLF','XLE','XLK',
+                        'SQQQ','TQQQ','SPXU','UPRO','UVXY','SVXY','VXX','VIXY'];
+
+async function buildDynamicWatchlist() {
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var todayStr = etNow.getFullYear() + '-' +
+    ('0'+(etNow.getMonth()+1)).slice(-2) + '-' +
+    ('0'+etNow.getDate()).slice(-2);
+
+  // Return cached result if already built today
+  if (dynamicWatchlistCache.date === todayStr && dynamicWatchlistCache.tickers.length > 0) {
+    return dynamicWatchlistCache.tickers;
+  }
+
+  var candidates = [];
+
+  // ── Source 1: Yahoo Finance most active screener ─────────────────────────────
+  try {
+    var r = await fetch('https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=most_actives&count=50', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'application/json' }
+    });
+    var data = await r.json();
+    var quotes = data && data.finance && data.finance.result && data.finance.result[0] && data.finance.result[0].quotes;
+    if (quotes && quotes.length) {
+      quotes.forEach(function(q) {
+        if (q && q.symbol && q.regularMarketPrice) {
+          candidates.push({
+            ticker: q.symbol.toUpperCase(),
+            price: parseFloat(q.regularMarketPrice) || 0,
+            volRatio: q.averageDailyVolume3Month > 0 ? (q.regularMarketVolume / q.averageDailyVolume3Month) : 0,
+            chgPct: parseFloat(q.regularMarketChangePercent) || 0,
+            name: q.shortName || q.symbol
+          });
+        }
+      });
+      console.log('Dynamic watchlist: got ' + quotes.length + ' candidates from Yahoo most_actives');
+    }
+  } catch(e) { console.error('Yahoo most_actives error:', e.message); }
+
+  // ── Source 2: Yahoo day gainers as supplement ─────────────────────────────────
+  try {
+    var r2 = await fetch('https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=25', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'application/json' }
+    });
+    var data2 = await r2.json();
+    var quotes2 = data2 && data2.finance && data2.finance.result && data2.finance.result[0] && data2.finance.result[0].quotes;
+    if (quotes2 && quotes2.length) {
+      quotes2.forEach(function(q) {
+        if (q && q.symbol && q.regularMarketPrice) {
+          var sym = q.symbol.toUpperCase();
+          if (!candidates.find(function(c) { return c.ticker === sym; })) {
+            candidates.push({
+              ticker: sym,
+              price: parseFloat(q.regularMarketPrice) || 0,
+              volRatio: q.averageDailyVolume3Month > 0 ? (q.regularMarketVolume / q.averageDailyVolume3Month) : 0,
+              chgPct: parseFloat(q.regularMarketChangePercent) || 0,
+              name: q.shortName || q.symbol
+            });
+          }
+        }
+      });
+    }
+  } catch(e2) { console.error('Yahoo day_gainers error:', e2.message); }
+
+  // ── Filter candidates ────────────────────────────────────────────────────────
+  var filtered = candidates.filter(function(c) {
+    // Price range
+    if (c.price < MIN_PRICE || c.price > MAX_PRICE) return false;
+    // Blocked tickers (ETFs, leveraged funds)
+    if (BLOCKED_TICKERS.indexOf(c.ticker) >= 0) return false;
+    // Anchor tickers handled separately
+    if (ANCHOR_TICKERS.indexOf(c.ticker) >= 0) return false;
+    // Skip tickers with dots or hyphens (warrants, preferred shares, foreign)
+    if (c.ticker.indexOf('.') >= 0 || c.ticker.indexOf('-') >= 0) return false;
+    // Skip very long tickers (usually SPACs or special vehicles)
+    if (c.ticker.length > 5) return false;
+    // Need meaningful volume
+    if (c.volRatio < 0.8) return false;
+    // Need meaningful price move (something happening today)
+    if (Math.abs(c.chgPct) < 1.0) return false;
+    return true;
+  });
+
+  // Sort by volume ratio descending — highest relative volume first
+  filtered.sort(function(a, b) { return b.volRatio - a.volRatio; });
+
+  // Take top DYNAMIC_SLOTS
+  var dynamic = filtered.slice(0, DYNAMIC_SLOTS).map(function(c) { return c.ticker; });
+
+  // Build final watchlist: anchors first, then dynamic
+  var final = ANCHOR_TICKERS.slice();
+  dynamic.forEach(function(t) {
+    if (final.indexOf(t) < 0) final.push(t);
+  });
+
+  // Fallback — if no dynamic tickers found, use defaults
+  if (dynamic.length === 0) {
+    final = ['TSLA', 'NVDA', 'AAPL', 'MSFT', 'META', 'AMZN', 'COIN'];
+    console.log('Dynamic watchlist: no candidates found, using fallback list');
+  }
+
+  console.log('Dynamic watchlist for ' + todayStr + ': ' + final.join(', '));
+  await addLog('entry', '📋 Dynamic watchlist: ' + final.join(', ') + ' (' + dynamic.length + ' movers + ' + ANCHOR_TICKERS.length + ' anchors)');
+
+  dynamicWatchlistCache = { date: todayStr, tickers: final };
+
+  // Persist to DB so it shows in UI
+  await setState('watchlist', final);
+
+  return final;
+}
+
 // Engine
 var engineTimer = null, monitorTimer = null;
 
@@ -967,7 +1091,9 @@ async function runEngine() {
   if (!engineOn) return;
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, maxDailyTrades: 3, contracts: 1, schedule: '5min' });
   var session = await getState('session', null);
-  var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
+  // Dynamic watchlist — rebuilt each morning from top volume movers
+  // Anchors (TSLA, NVDA) always included; 5 slots filled dynamically
+  var watchlist = await buildDynamicWatchlist();
   var dailyLoss = await getState('dailyLoss', 0);
   var dailyProfit = await getState('dailyProfit', 0);
   var killSwitch = await getState('killSwitch', false);
@@ -1409,7 +1535,9 @@ app.post('/api/killswitch', async function(req, res) {
 app.get('/api/state', async function(req, res) {
   var engineOn = await getState('engineOn', false);
   var settings = await getState('settings', { profitTarget: 0.50, stopLoss: 0.25, dailyMax: 500, dailyProfitTarget: 200, maxPositions: 2, maxDailyTrades: 3, contracts: 1, schedule: '5min' });
-  var watchlist = await getState('watchlist', ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
+  // Dynamic watchlist — rebuilt each morning from top volume movers
+  // Anchors (TSLA, NVDA) always included; 5 slots filled dynamically
+  var watchlist = await buildDynamicWatchlist();
   var killSwitch = await getState('killSwitch', false);
   var dailyLoss = await getState('dailyLoss', 0);
   var dailyProfit = await getState('dailyProfit', 0);
@@ -1580,7 +1708,8 @@ function scheduleMidnightReset() {
     await setState('dailyProfit', 0);
     await setState('profitTargetHit', false);
     await setState('lastOrderRejected', false); // clear circuit breaker each new day
-    console.log('Daily counters reset at midnight ET');
+    dynamicWatchlistCache = { date: null, tickers: [] }; // force watchlist rebuild at open
+    console.log('Daily counters reset at midnight ET — watchlist will rebuild at market open');
     scheduleMidnightReset();
   }, msUntil);
 }
