@@ -1106,19 +1106,50 @@ async function runEngine() {
     return true;
   });
 
-  // Daily trade limit — stop after max trades to avoid overtrading
-  var maxDailyTrades = settings.maxDailyTrades || 3;
-  var today = new Date().toLocaleDateString('en-CA');
+  // ── Asymmetric daily limits — let winners run, stop losses early ────────────
+  var maxDailyTrades   = settings.maxDailyTrades   || 10;
+  var maxDailyLosses   = settings.maxDailyLosses   || 2;
+  var maxConsecLosses  = settings.maxConsecLosses  || 2;
   try {
-    var todayCount = await pool.query(
-      "SELECT COUNT(*) FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE"
+    var todayRows = await pool.query(
+      "SELECT result FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE ORDER BY ts ASC"
     );
-    var tradesToday = parseInt((todayCount.rows[0] || {}).count || 0);
+    var todayTrades   = todayRows.rows;
+    var tradesToday   = todayTrades.length;
+    var lossTrades    = todayTrades.filter(function(t) { return t.result === 'loss'; });
+    var lossesToday   = lossTrades.length;
+
+    // Count consecutive losses from the END of today's trades
+    var consecLosses = 0;
+    for (var ci = todayTrades.length - 1; ci >= 0; ci--) {
+      if (todayTrades[ci].result === 'loss') consecLosses++;
+      else break;
+    }
+
+    // Hard daily trade cap
     if (tradesToday >= maxDailyTrades) {
       await addLog('skip', '🔢 Daily trade limit reached (' + tradesToday + '/' + maxDailyTrades + ') — done for today');
       return;
     }
-    await addLog('entry', 'Trades today: ' + tradesToday + '/' + maxDailyTrades);
+    // Max daily losses
+    if (lossesToday >= maxDailyLosses) {
+      await addLog('stop', '🛑 Max daily losses reached (' + lossesToday + '/' + maxDailyLosses + ') — protecting capital, stopping for today');
+      await setState('engineOn', false);
+      clearInterval(engineTimer);
+      clearInterval(monitorTimer);
+      scheduleMarketOpenRestart();
+      return;
+    }
+    // Max consecutive losses
+    if (consecLosses >= maxConsecLosses) {
+      await addLog('stop', '🛑 ' + consecLosses + ' consecutive losses — stopping engine to prevent loss streak');
+      await setState('engineOn', false);
+      clearInterval(engineTimer);
+      clearInterval(monitorTimer);
+      scheduleMarketOpenRestart();
+      return;
+    }
+    await addLog('entry', 'Trades today: ' + tradesToday + '/' + maxDailyTrades + ' | Losses: ' + lossesToday + '/' + maxDailyLosses + ' | Consec losses: ' + consecLosses);
   } catch(te) { console.error('daily trade count error:', te.message); }
 
   if (signals.length > 0) {
@@ -1385,7 +1416,19 @@ app.get('/api/state', async function(req, res) {
   var profitTargetHit = await getState('profitTargetHit', false);
   var lastOrderRejected = await getState('lastOrderRejected', false);
   var session = await getState('session', null);
-  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit, profitTargetHit: profitTargetHit, lastOrderRejected: lastOrderRejected, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive });
+  // Include today's loss count for dashboard display
+  var todayLossCount = 0;
+  var todayConsecLosses = 0;
+  try {
+    var tlRows = await pool.query("SELECT result FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE ORDER BY ts ASC");
+    var tlTrades = tlRows.rows;
+    todayLossCount = tlTrades.filter(function(t){return t.result==='loss';}).length;
+    for (var tci = tlTrades.length-1; tci >= 0; tci--) {
+      if (tlTrades[tci].result === 'loss') todayConsecLosses++;
+      else break;
+    }
+  } catch(e) {}
+  res.json({ engineOn: engineOn, settings: settings, watchlist: watchlist, killSwitch: killSwitch, dailyLoss: dailyLoss, dailyProfit: dailyProfit, profitTargetHit: profitTargetHit, lastOrderRejected: lastOrderRejected, hasSession: !!session, accountId: session && session.accountId, isLive: session && session.isLive, todayLossCount: todayLossCount, todayConsecLosses: todayConsecLosses });
 });
 
 app.get('/api/logs', async function(req, res) {
