@@ -720,7 +720,10 @@ async function scanTicker(ticker, settings, marketTrend) {
   }
 
   // 3. Flat market — no intraday movement, no signal
-  if (Math.abs(chg) < 0.15) {
+  // Skip this filter for the first 10 minutes of trading (before 9:40am ET)
+  // because Tradier sandbox doesn't return prevclose at open, causing false 0% readings
+  var minutesIntoDay = d.minutesIntoDay || 0;
+  if (minutesIntoDay > 10 && Math.abs(chg) < 0.15) {
     await addLog('skip', ticker + ' flat ' + chg + '% change — skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'flat market', d: d };
   }
