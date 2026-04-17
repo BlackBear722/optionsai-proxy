@@ -233,7 +233,11 @@ async function fetchQuote(ticker) {
 
       if (q && q.last && parseFloat(q.last) > 0) {
         var price = parseFloat(q.last);
-        var prev = parseFloat(q.prevclose) || price;
+        var prev = parseFloat(q.prevclose) || 0;
+        if (prev <= 0) {
+          var cached = await getPrevClose(ticker);
+          prev = cached || price;
+        }
         var chgPct = prev > 0 ? ((price - prev) / prev * 100) : 0;
         var high = parseFloat(q.high) || price;
         var low = parseFloat(q.low) || price;
@@ -686,6 +690,29 @@ function checkZoneRetest(zones, candles, currentPrice) {
 
 // Last known price cache for change-threshold pre-filter: { ticker: lastPrice }
 var lastScanPrice = {};
+// Previous close cache — fetched once per day from Yahoo to fix Tradier sandbox prevclose=null
+var prevCloseCache = {}; // { ticker: prevClose }
+var prevCloseCacheDate = null;
+
+async function getPrevClose(ticker) {
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var todayStr = etNow.getFullYear() + '-' + ('0'+(etNow.getMonth()+1)).slice(-2) + '-' + ('0'+etNow.getDate()).slice(-2);
+  if (prevCloseCacheDate === todayStr && prevCloseCache[ticker]) return prevCloseCache[ticker];
+  try {
+    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=2d', {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+    });
+    var data = await r.json();
+    var meta = data && data.chart && data.chart.result && data.chart.result[0] && data.chart.result[0].meta;
+    var pc = meta && (meta.previousClose || meta.chartPreviousClose);
+    if (pc && parseFloat(pc) > 0) {
+      if (prevCloseCacheDate !== todayStr) { prevCloseCache = {}; prevCloseCacheDate = todayStr; }
+      prevCloseCache[ticker] = parseFloat(pc);
+      return prevCloseCache[ticker];
+    }
+  } catch(e) { console.error('getPrevClose error ' + ticker + ':', e.message); }
+  return null;
+}
 
 async function scanTicker(ticker, settings, marketTrend) {
   var d = await fetchQuote(ticker);
@@ -1667,7 +1694,8 @@ function scheduleMidnightReset() {
     await setState('profitTargetHit', false);
     await setState('lastOrderRejected', false); // clear circuit breaker each new day
     dynamicWatchlistCache = { date: null, tickers: [] }; // force watchlist rebuild at open
-    console.log('Daily counters reset at midnight ET — watchlist will rebuild at market open');
+    prevCloseCache = {}; prevCloseCacheDate = null; // force prevclose refresh at open
+    console.log('Daily counters reset at midnight ET — watchlist and prevclose cache will rebuild at market open');
     scheduleMidnightReset();
   }, msUntil);
 }
