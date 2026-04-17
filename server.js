@@ -802,7 +802,7 @@ async function scanTicker(ticker, settings, marketTrend) {
     var match = text.match(/<SCAN_RESULT>([\s\S]*?)<\/SCAN_RESULT>/);
     if (match) {
       var result = JSON.parse(match[1]);
-      await addLog(result.confidence === 'HIGH' || result.confidence === 'MEDIUM' ? 'trade' : 'skip',
+      await addLog(result.confidence === 'HIGH' ? 'trade' : 'skip',
         'Claude ' + ticker + ': ' + result.signal + ' (' + result.confidence + ') $' + result.premium + ' — ' + result.reason);
       return { ticker: ticker, signal: result.signal, confidence: result.confidence, premium: result.premium, strike: currentPrice, reason: result.reason, d: d };
     } else {
