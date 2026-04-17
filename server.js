@@ -766,7 +766,7 @@ async function scanTicker(ticker, settings, marketTrend) {
   var currentPrice = parseFloat(d.price);
   if (lastPrice) {
     var priceDeltaPct = Math.abs((currentPrice - lastPrice) / lastPrice * 100);
-    if (priceDeltaPct < 0.2) {
+    if (priceDeltaPct < 0.1) {
       await addLog('skip', ticker + ' price unchanged (' + priceDeltaPct.toFixed(2) + '% move) — skipping Claude');
       return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'no price change', d: d };
     }
