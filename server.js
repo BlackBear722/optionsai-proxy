@@ -1099,7 +1099,20 @@ async function runEngine() {
   var killSwitch = await getState('killSwitch', false);
   if (!session) { await addLog('skip', 'no session'); return; }
   if (killSwitch) { await addLog('stop', 'kill switch on'); return; }
-  if (dailyLoss >= settings.dailyMax) { await addLog('stop', 'daily loss limit hit $' + settings.dailyMax); await setState('engineOn', false); return; }
+  if (dailyLoss >= settings.dailyMax) {
+    await addLog('stop', 'daily loss limit hit $' + settings.dailyMax + ' — closing all positions');
+    await setState('engineOn', false);
+    try {
+      var dlPos = await getPositions(session);
+      for (var dli = 0; dli < dlPos.length; dli++) {
+        await closePos(dlPos[dli], session);
+        await addLog('stop', '🔒 Closed overnight risk: ' + dlPos[dli].symbol);
+      }
+    } catch(dle) { await addLog('stop', 'Error closing positions on daily loss: ' + dle.message); }
+    clearInterval(engineTimer); clearInterval(monitorTimer);
+    scheduleMarketOpenRestart();
+    return;
+  }
 
   // Daily profit target check — close all positions, stop engine, schedule 9:30am restart
   if (settings.dailyProfitTarget > 0 && dailyProfit >= settings.dailyProfitTarget) {
@@ -1257,19 +1270,33 @@ async function runEngine() {
       await addLog('skip', '🔢 Daily trade limit reached (' + tradesToday + '/' + maxDailyTrades + ') — done for today');
       return;
     }
-    // Max daily losses
+    // Max daily losses — close all open positions before stopping to prevent overnight risk
     if (lossesToday >= maxDailyLosses) {
-      await addLog('stop', '🛑 Max daily losses reached (' + lossesToday + '/' + maxDailyLosses + ') — protecting capital, stopping for today');
+      await addLog('stop', '🛑 Max daily losses reached (' + lossesToday + '/' + maxDailyLosses + ') — closing all positions & stopping for today');
       await setState('engineOn', false);
+      try {
+        var mlPos = await getPositions(session);
+        for (var mli = 0; mli < mlPos.length; mli++) {
+          await closePos(mlPos[mli], session);
+          await addLog('stop', '🔒 Closed overnight risk: ' + mlPos[mli].symbol);
+        }
+      } catch(mle) { await addLog('stop', 'Error closing positions on max losses: ' + mle.message); }
       clearInterval(engineTimer);
       clearInterval(monitorTimer);
       scheduleMarketOpenRestart();
       return;
     }
-    // Max consecutive losses
+    // Max consecutive losses — close all open positions before stopping
     if (consecLosses >= maxConsecLosses) {
-      await addLog('stop', '🛑 ' + consecLosses + ' consecutive losses — stopping engine to prevent loss streak');
+      await addLog('stop', '🛑 ' + consecLosses + ' consecutive losses — closing all positions & stopping engine');
       await setState('engineOn', false);
+      try {
+        var clPos = await getPositions(session);
+        for (var cli = 0; cli < clPos.length; cli++) {
+          await closePos(clPos[cli], session);
+          await addLog('stop', '🔒 Closed overnight risk: ' + clPos[cli].symbol);
+        }
+      } catch(cle) { await addLog('stop', 'Error closing positions on consec losses: ' + cle.message); }
       clearInterval(engineTimer);
       clearInterval(monitorTimer);
       scheduleMarketOpenRestart();
