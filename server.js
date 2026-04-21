@@ -356,7 +356,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRules:\n- BUY_CALL: RSI 50-65, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend is UP\n- BUY_PUT: RSI 35-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend is DOWN\n- HIGH confidence: ALL conditions clearly met\n- MEDIUM confidence: most conditions met but one is borderline — prefer NONE over MEDIUM when trend is weak\n- LOW or NONE: any mixed signals, trend disagreement, or RSI overbought/oversold\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -734,10 +734,16 @@ async function scanTicker(ticker, settings, marketTrend) {
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'earnings blackout', d: d };
   }
 
-  // 2. Extreme RSI — overbought/oversold, no edge
-  if (rsi > 80 || rsi < 20) {
-    await addLog('skip', ticker + ' extreme RSI ' + rsi + ' — skipping Claude');
-    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'extreme RSI', d: d };
+  // 2. RSI hard limits — prevent entering exhausted moves
+  // Calls need RSI 50-70 (rising momentum), Puts need RSI 30-50 (falling momentum)
+  // Block entirely if RSI is in extreme territory where snap-backs are likely
+  if (rsi > 70) {
+    await addLog('skip', ticker + ' RSI ' + rsi + ' overbought (>70) — snap-back risk, skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI overbought', d: d };
+  }
+  if (rsi < 30) {
+    await addLog('skip', ticker + ' RSI ' + rsi + ' oversold (<30) — bounce risk, skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI oversold', d: d };
   }
 
   // 2. Wide spread — too expensive to trade profitably
@@ -970,6 +976,14 @@ async function buildDynamicWatchlist() {
     return dynamicWatchlistCache.tickers;
   }
 
+  // Wait until 10:00am ET (30 minutes into trading) before building dynamic list
+  // Yahoo screener needs volume data to accumulate before movers are reliable
+  var midNow = etNow.getHours() * 60 + etNow.getMinutes() - (9 * 60 + 30);
+  if (midNow < 30) {
+    console.log('Dynamic watchlist: too early (' + midNow + ' min into trading) — using fallback until 10:00am ET');
+    return ['TSLA', 'NVDA', 'META', 'MSFT', 'MSTR', 'COIN', 'PLTR'];
+  }
+
   var candidates = [];
 
   // ── Source 1: Yahoo Finance most active screener ─────────────────────────────
@@ -1053,8 +1067,9 @@ async function buildDynamicWatchlist() {
 
   // Fallback — if no dynamic tickers found, use defaults
   if (dynamic.length === 0) {
-    final = ['TSLA', 'NVDA', 'AAPL', 'MSFT', 'META', 'AMZN', 'COIN'];
-    console.log('Dynamic watchlist: no candidates found, using fallback list');
+    // High-beta, high-volume fallback tickers that consistently pass filters
+    final = ['TSLA', 'NVDA', 'META', 'MSFT', 'MSTR', 'COIN', 'PLTR'];
+    console.log('Dynamic watchlist: no candidates found, using high-beta fallback list');
   }
 
   console.log('Dynamic watchlist for ' + todayStr + ': ' + final.join(', '));
