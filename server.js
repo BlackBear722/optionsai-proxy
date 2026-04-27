@@ -1755,17 +1755,20 @@ function scheduleMarketOpenRestart() {
   var msUntil = target - et;
   console.log('Auto-restart scheduled for ' + target.toDateString() + ' 9:30am ET (' + Math.round(msUntil / 3600000) + 'h away)');
   setTimeout(async function() {
-    var profitHit = await getState('profitTargetHit', false);
     var killSwitch = await getState('killSwitch', false);
     var session = await getState('session', null);
     if (killSwitch) { console.log('9:30am restart skipped — kill switch on'); return; }
-    if (!profitHit) { console.log('9:30am restart skipped — profit target was not the stop reason'); return; }
     if (!session) { console.log('9:30am restart skipped — no session'); return; }
+    // Reset all daily counters regardless of why engine stopped
     await setState('profitTargetHit', false);
     await setState('dailyLoss', 0);
     await setState('dailyProfit', 0);
+    await setState('lastOrderRejected', false);
     await setState('engineOn', true);
-    var s = await getState('settings', { schedule: '5min' });
+    // Reset dynamic watchlist and prevclose cache for new day
+    dynamicWatchlistCache = { date: null, tickers: [] };
+    prevCloseCache = {}; prevCloseCacheDate = null;
+    var s = await getState('settings', { schedule: '1min' });
     startTimers(s.schedule);
     await addLog('trade', '🟢 Engine auto-restarted at market open — new trading day');
     runEngine();
@@ -1939,14 +1942,91 @@ pool.connect()
     app.listen(PORT, function() { console.log('running on port ' + PORT); });
     scheduleMidnightReset();
     scheduleMarketOpenRestart();
-    getState('engineOn', false).then(function(on) {
-      if (on) {
-        getState('settings', { schedule: '5min' }).then(function(s) {
+
+    // ── Smart startup: auto-restart engine if market is open and engine was running ──
+    // Handles Railway redeploys and server restarts without manual intervention
+    (async function startupCheck() {
+      try {
+        var engineOn = await getState('engineOn', false);
+        var killSwitch = await getState('killSwitch', false);
+        var session = await getState('session', null);
+        var profitTargetHit = await getState('profitTargetHit', false);
+
+        var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        var midE = etNow.getHours() * 60 + etNow.getMinutes() - (9 * 60 + 30);
+        var isWeekday = etNow.getDay() >= 1 && etNow.getDay() <= 5;
+        var isMarketHours = isWeekday && midE >= 0 && midE <= 390;
+
+        if (killSwitch) {
+          console.log('Startup: kill switch is ON — engine stays off');
+          return;
+        }
+
+        if (!session) {
+          console.log('Startup: no session found — engine stays off');
+          return;
+        }
+
+        if (engineOn) {
+          // Engine was already on — restart timers
+          var s = await getState('settings', { schedule: '1min' });
+          startTimers(s.schedule);
+          console.log('Startup: engine was ON — timers restarted');
+          if (isMarketHours) {
+            await addLog('entry', '🔄 Server restarted during market hours — engine resuming automatically');
+            runEngine();
+          }
+          return;
+        }
+
+        // Engine was off — check if it should auto-restart
+        // Auto-restart if: market is open AND engine was stopped by loss limit (not manually)
+        // We detect manual off vs auto-stop by checking if profitTargetHit is false
+        // (loss limit stops don't set profitTargetHit, but we still want to restart next day)
+        if (isMarketHours && !profitTargetHit) {
+          // Check if losses today already hit the limit — if so, stay off
+          var todayRows = await pool.query(
+            "SELECT result FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE ORDER BY ts ASC"
+          );
+          var todayLosses = todayRows.rows.filter(function(t) { return t.result === 'loss'; }).length;
+          var maxDailyLosses = 2;
+          try {
+            var settings = await getState('settings', {});
+            maxDailyLosses = settings.maxDailyLosses || 2;
+          } catch(e) {}
+
+          if (todayLosses >= maxDailyLosses) {
+            console.log('Startup: loss limit already hit today (' + todayLosses + '/' + maxDailyLosses + ') — staying off');
+            await addLog('skip', '🔄 Server restarted — loss limit already hit today, engine staying off until tomorrow');
+            return;
+          }
+
+          // Safe to restart
+          await setState('engineOn', true);
+          var s2 = await getState('settings', { schedule: '1min' });
+          startTimers(s2.schedule);
+          await addLog('entry', '🔄 Server restarted during market hours — engine auto-restarted (' + todayLosses + ' losses today)');
+          runEngine();
+        } else if (!isMarketHours) {
+          console.log('Startup: market is closed — engine stays off until 9:30am');
+          // scheduleMarketOpenRestart already called above handles the 9:30am restart
+          // But also set engineOn=true so when it fires it will restart correctly
+          if (isWeekday) {
+            await setState('engineOn', true);
+            console.log('Startup: set engineOn=true so scheduleMarketOpenRestart will fire at 9:30am');
+          }
+        }
+      } catch(startupErr) {
+        console.error('Startup check error:', startupErr.message);
+        // Fall back to original behavior
+        var on = await getState('engineOn', false).catch(function() { return false; });
+        if (on) {
+          var s = await getState('settings', { schedule: '1min' }).catch(function() { return { schedule: '1min' }; });
           startTimers(s.schedule);
           runEngine();
-        });
+        }
       }
-    });
+    })();
   })
   .catch(function(e) {
     console.error('DB failed:', e.message);
