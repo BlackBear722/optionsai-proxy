@@ -463,7 +463,7 @@ async function getSPYTrend(session) {
     var last9 = closes.slice(-9);
     var ma9 = last9.reduce(function(s, v) { return s + v; }, 0) / 9;
     var diffPct = ((price - ma9) / ma9) * 100;
-    var trend = diffPct > 0.05 ? 'UP' : diffPct < -0.05 ? 'DOWN' : 'FLAT';
+    var trend = diffPct > 0.03 ? 'UP' : diffPct < -0.03 ? 'DOWN' : 'FLAT';
     console.log('SPY trend (MA9): ' + trend + ' price=$' + price.toFixed(2) + ' MA9=$' + ma9.toFixed(2) + ' diff=' + diffPct.toFixed(3) + '%');
     spyTrendCache = { trend: trend, ts: Date.now(), ma9: ma9, price: price };
     return spyTrendCache;
@@ -1174,7 +1174,7 @@ async function runEngine() {
     return;
   }
 
-  var inMorning   = midE >= 0   && midE <= 390;  // 9:30am–4:00pm (full day)
+  var inMorning   = midE >= 0   && midE <= 120;  // 9:30am–11:30am ET (best win rate window)
   var inAfternoon = false;
   if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
     // Convert midE back to clock time for the log message
@@ -1247,8 +1247,9 @@ async function runEngine() {
 
   // ── Asymmetric daily limits — let winners run, stop losses early ────────────
   var maxDailyTrades   = settings.maxDailyTrades   || 10;
-  var maxDailyLosses   = settings.maxDailyLosses   || 2;
+  var maxDailyLosses   = settings.maxDailyLosses   || 3;   // raised from 2 to 3
   var maxConsecLosses  = settings.maxConsecLosses  || 2;
+  var maxDailyLossDollars = settings.maxDailyLossDollars || 1.50; // $1.50 dollar floor
   try {
     var todayRows = await pool.query(
       "SELECT result FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE ORDER BY ts ASC"
@@ -1270,6 +1271,23 @@ async function runEngine() {
       await addLog('skip', '🔢 Daily trade limit reached (' + tradesToday + '/' + maxDailyTrades + ') — done for today');
       return;
     }
+    // Dollar loss floor — stop if total losses exceed $1.50 regardless of trade count
+    var totalDollarLoss = Math.abs(parseFloat(await getState('dailyLoss', 0)) || 0);
+    if (totalDollarLoss >= maxDailyLossDollars) {
+      await addLog('stop', '🛑 Daily dollar loss limit reached ($' + totalDollarLoss.toFixed(2) + '/$' + maxDailyLossDollars + ') — closing all positions & stopping for today');
+      await setState('engineOn', false);
+      try {
+        var dlPos2 = await getPositions(session);
+        for (var dli2 = 0; dli2 < dlPos2.length; dli2++) {
+          await closePos(dlPos2[dli2], session);
+          await addLog('stop', '🔒 Closed: ' + dlPos2[dli2].symbol);
+        }
+      } catch(dle2) { await addLog('stop', 'Error closing on dollar loss: ' + dle2.message); }
+      clearInterval(engineTimer); clearInterval(monitorTimer);
+      scheduleMarketOpenRestart();
+      return;
+    }
+
     // Max daily losses — close all open positions before stopping to prevent overnight risk
     if (lossesToday >= maxDailyLosses) {
       await addLog('stop', '🛑 Max daily losses reached (' + lossesToday + '/' + maxDailyLosses + ') — closing all positions & stopping for today');
