@@ -356,7 +356,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 52-70. NEVER enter a call if RSI is above 70 (overbought) or below 52 (no confirmed upside momentum). RSI of exactly 50 is NOT acceptable.\n- BUY_PUT: RSI must be between 30-48. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 48 (no confirmed downside momentum). RSI of exactly 50 is NOT acceptable.\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- RSI at exactly 50 = NEUTRAL = DO NOT enter either direction\n- The IDEAL RSI for calls is 54-65 (rising momentum). The IDEAL RSI for puts is 35-46 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -744,6 +744,11 @@ async function scanTicker(ticker, settings, marketTrend) {
   if (rsi < 30) {
     await addLog('skip', ticker + ' RSI ' + rsi + ' oversold (<30) — bounce risk, skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI oversold', d: d };
+  }
+  // RSI 50 = neutral — block entries in both directions at exact boundary
+  if (rsi === 50) {
+    await addLog('skip', ticker + ' RSI exactly 50 — neutral zone, no directional edge, skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI neutral', d: d };
   }
 
   // 2. Wide spread — too expensive to trade profitably
@@ -1174,7 +1179,7 @@ async function runEngine() {
     return;
   }
 
-  var inMorning   = midE >= 0   && midE <= 120;  // 9:30am–11:30am ET (best win rate window)
+  var inMorning   = midE >= 0   && midE <= 150;  // 9:30am–12:00pm ET (extended to capture full 10am hour)
   var inAfternoon = false;
   if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
     // Convert midE back to clock time for the log message
@@ -1231,6 +1236,15 @@ async function runEngine() {
     results.push(result);
   }
 
+  // ── Same-ticker cooldown — prevent re-entering same ticker within 5 minutes ──
+  var recentTickers = {};
+  try {
+    var recentRows = await pool.query(
+      "SELECT ticker, ts FROM trades WHERE ts > NOW() - INTERVAL '5 minutes' ORDER BY ts DESC"
+    );
+    recentRows.rows.forEach(function(r) { recentTickers[r.ticker.toUpperCase()] = true; });
+  } catch(rte) { console.error('recent ticker check error:', rte.message); }
+
   // HIGH confidence only — MEDIUM signals have poor historical win rate
   var signals = results.filter(function(r) {
     if (r.signal !== 'BUY_CALL' && r.signal !== 'BUY_PUT') return false;
@@ -1240,6 +1254,10 @@ async function runEngine() {
     if (spyTrend.trend === 'DOWN' && r.signal === 'BUY_CALL') { return false; }
     // Fix 2: Block any ticker already held
     if (heldTickers[r.ticker.toUpperCase()]) {
+      return false;
+    }
+    // Fix 3: Block any ticker traded in the last 5 minutes — prevent rapid re-entry
+    if (recentTickers[r.ticker.toUpperCase()]) {
       return false;
     }
     return true;
@@ -1345,7 +1363,13 @@ async function runEngine() {
     scored.sort(function(a, b) { return b.score - a.score; });
     var best = scored[0];
     await addLog('trade', 'BEST: ' + best.ticker + ' ' + best.signal + ' score:' + best.score.toFixed(0) + ' @ $' + best.premium);
-    var trade = { action: 'BUY', type: best.signal.indexOf('CALL') >= 0 ? 'CALL' : 'PUT', ticker: best.ticker, strike: parseFloat(best.d && best.d.price ? best.d.price : best.strike), contracts: settings.contracts, limitPrice: best.premium };
+    // Use 2 contracts for HIGH confidence NVDA setups — best performing ticker (61%+ win rate)
+    var tradeContracts = settings.contracts || 1;
+    if (best.ticker === 'NVDA' && best.confidence === 'HIGH') {
+      tradeContracts = Math.min(2, settings.contracts * 2);
+      await addLog('entry', '📈 NVDA HIGH confidence — using ' + tradeContracts + ' contracts (2x standard)');
+    }
+    var trade = { action: 'BUY', type: best.signal.indexOf('CALL') >= 0 ? 'CALL' : 'PUT', ticker: best.ticker, strike: parseFloat(best.d && best.d.price ? best.d.price : best.strike), contracts: tradeContracts, limitPrice: best.premium };
     try {
       var orderResult = await placeTrade(trade, session);
       var orderId = orderResult && orderResult.order && orderResult.order.id;
