@@ -262,15 +262,66 @@ async function fetchQuote(ticker) {
             var lows   = candles.map(function(c) { return parseFloat(c.low);   }).filter(function(v) { return !isNaN(v); });
             var vols   = candles.map(function(c) { return parseFloat(c.volume);}).filter(function(v) { return !isNaN(v); });
 
-            if (closes.length >= 15) rsi = calcRSI(closes);
+            if (closes.length >= 15) {
+              rsi = calcRSI(closes);
+            } else if (closes.length >= 5) {
+              // Not enough candles for full RSI — try Yahoo Finance for more candle history
+              try {
+                var yRSI = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
+                  headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+                });
+                var yRSIData = await yRSI.json();
+                var yRSIRes = yRSIData && yRSIData.chart && yRSIData.chart.result && yRSIData.chart.result[0];
+                var yRSIQ = yRSIRes && yRSIRes.indicators && yRSIRes.indicators.quote && yRSIRes.indicators.quote[0];
+                if (yRSIQ && yRSIQ.close) {
+                  var yCloses = yRSIQ.close.filter(function(v) { return v != null && !isNaN(v); });
+                  if (yCloses.length >= 15) {
+                    rsi = calcRSI(yCloses);
+                    console.log(ticker + ' RSI from Yahoo fallback (' + yCloses.length + ' candles): ' + rsi);
+                  } else {
+                    rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                    console.log(ticker + ' RSI from day-change estimate (insufficient Yahoo candles): ' + rsi);
+                  }
+                }
+              } catch(yRSIErr) {
+                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                console.log(ticker + ' RSI from day-change estimate (Yahoo error): ' + rsi);
+              }
+            } else {
+              rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+            }
             if (closes.length > 0)   vwap = calcVWAP(closes, highs, lows, vols).toFixed(2);
             bull = countConsecutive(opens, closes, 'bull');
             bear = countConsecutive(opens, closes, 'bear');
             console.log('5-min candles: ' + candles.length + ' RSI:' + rsi + ' VWAP:' + vwap + ' bull:' + bull + ' bear:' + bear);
           } else {
-            // Not enough candles yet (early in day) — fall back to day-change estimate
-            rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 52 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-            console.log('No 5-min candles yet for ' + ticker + ' — using fallback RSI:' + rsi);
+            // No candles at all — try Yahoo Finance for full RSI
+            try {
+              var yRSI0 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
+                headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+              });
+              var yRSI0Data = await yRSI0.json();
+              var yRSI0Res = yRSI0Data && yRSI0Data.chart && yRSI0Data.chart.result && yRSI0Data.chart.result[0];
+              var yRSI0Q = yRSI0Res && yRSI0Res.indicators && yRSI0Res.indicators.quote && yRSI0Res.indicators.quote[0];
+              if (yRSI0Q && yRSI0Q.close) {
+                var y0Closes = yRSI0Q.close.filter(function(v) { return v != null && !isNaN(v); });
+                var y0Opens  = (yRSI0Q.open  || []).filter(function(v) { return v != null && !isNaN(v); });
+                var y0Highs  = (yRSI0Q.high  || []).filter(function(v) { return v != null && !isNaN(v); });
+                var y0Lows   = (yRSI0Q.low   || []).filter(function(v) { return v != null && !isNaN(v); });
+                var y0Vols   = (yRSI0Q.volume|| []).filter(function(v) { return v != null && !isNaN(v); });
+                if (y0Closes.length >= 15) rsi = calcRSI(y0Closes);
+                else rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                if (y0Closes.length > 0) vwap = calcVWAP(y0Closes, y0Highs, y0Lows, y0Vols).toFixed(2);
+                bull = countConsecutive(y0Opens, y0Closes, 'bull');
+                bear = countConsecutive(y0Opens, y0Closes, 'bear');
+                console.log(ticker + ' full Yahoo fallback: ' + y0Closes.length + ' candles RSI:' + rsi);
+              } else {
+                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+              }
+            } catch(y0Err) {
+              rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+              console.log('No candles for ' + ticker + ' — using day-change RSI estimate: ' + rsi);
+            }
           }
         } catch(ce) { console.error('candle parse error ' + ticker + ': ' + ce.message); }
 
