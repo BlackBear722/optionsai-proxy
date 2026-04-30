@@ -262,66 +262,15 @@ async function fetchQuote(ticker) {
             var lows   = candles.map(function(c) { return parseFloat(c.low);   }).filter(function(v) { return !isNaN(v); });
             var vols   = candles.map(function(c) { return parseFloat(c.volume);}).filter(function(v) { return !isNaN(v); });
 
-            if (closes.length >= 15) {
-              rsi = calcRSI(closes);
-            } else if (closes.length >= 5) {
-              // Not enough candles for full RSI — try Yahoo Finance for more candle history
-              try {
-                var yRSI = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
-                  headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
-                });
-                var yRSIData = await yRSI.json();
-                var yRSIRes = yRSIData && yRSIData.chart && yRSIData.chart.result && yRSIData.chart.result[0];
-                var yRSIQ = yRSIRes && yRSIRes.indicators && yRSIRes.indicators.quote && yRSIRes.indicators.quote[0];
-                if (yRSIQ && yRSIQ.close) {
-                  var yCloses = yRSIQ.close.filter(function(v) { return v != null && !isNaN(v); });
-                  if (yCloses.length >= 15) {
-                    rsi = calcRSI(yCloses);
-                    console.log(ticker + ' RSI from Yahoo fallback (' + yCloses.length + ' candles): ' + rsi);
-                  } else {
-                    rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-                    console.log(ticker + ' RSI from day-change estimate (insufficient Yahoo candles): ' + rsi);
-                  }
-                }
-              } catch(yRSIErr) {
-                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-                console.log(ticker + ' RSI from day-change estimate (Yahoo error): ' + rsi);
-              }
-            } else {
-              rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-            }
+            if (closes.length >= 15) rsi = calcRSI(closes);
             if (closes.length > 0)   vwap = calcVWAP(closes, highs, lows, vols).toFixed(2);
             bull = countConsecutive(opens, closes, 'bull');
             bear = countConsecutive(opens, closes, 'bear');
             console.log('5-min candles: ' + candles.length + ' RSI:' + rsi + ' VWAP:' + vwap + ' bull:' + bull + ' bear:' + bear);
           } else {
-            // No candles at all — try Yahoo Finance for full RSI
-            try {
-              var yRSI0 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
-                headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
-              });
-              var yRSI0Data = await yRSI0.json();
-              var yRSI0Res = yRSI0Data && yRSI0Data.chart && yRSI0Data.chart.result && yRSI0Data.chart.result[0];
-              var yRSI0Q = yRSI0Res && yRSI0Res.indicators && yRSI0Res.indicators.quote && yRSI0Res.indicators.quote[0];
-              if (yRSI0Q && yRSI0Q.close) {
-                var y0Closes = yRSI0Q.close.filter(function(v) { return v != null && !isNaN(v); });
-                var y0Opens  = (yRSI0Q.open  || []).filter(function(v) { return v != null && !isNaN(v); });
-                var y0Highs  = (yRSI0Q.high  || []).filter(function(v) { return v != null && !isNaN(v); });
-                var y0Lows   = (yRSI0Q.low   || []).filter(function(v) { return v != null && !isNaN(v); });
-                var y0Vols   = (yRSI0Q.volume|| []).filter(function(v) { return v != null && !isNaN(v); });
-                if (y0Closes.length >= 15) rsi = calcRSI(y0Closes);
-                else rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-                if (y0Closes.length > 0) vwap = calcVWAP(y0Closes, y0Highs, y0Lows, y0Vols).toFixed(2);
-                bull = countConsecutive(y0Opens, y0Closes, 'bull');
-                bear = countConsecutive(y0Opens, y0Closes, 'bear');
-                console.log(ticker + ' full Yahoo fallback: ' + y0Closes.length + ' candles RSI:' + rsi);
-              } else {
-                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-              }
-            } catch(y0Err) {
-              rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-              console.log('No candles for ' + ticker + ' — using day-change RSI estimate: ' + rsi);
-            }
+            // Not enough candles yet (early in day) — fall back to day-change estimate
+            rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 52 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+            console.log('No 5-min candles yet for ' + ticker + ' — using fallback RSI:' + rsi);
           }
         } catch(ce) { console.error('candle parse error ' + ticker + ': ' + ce.message); }
 
@@ -407,7 +356,10 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 52-70. NEVER enter a call if RSI is above 70 (overbought) or below 52 (no confirmed upside momentum). RSI of exactly 50 is NOT acceptable.\n- BUY_PUT: RSI must be between 30-48. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 48 (no confirmed downside momentum). RSI of exactly 50 is NOT acceptable.\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- RSI at exactly 50 = NEUTRAL = DO NOT enter either direction\n- The IDEAL RSI for calls is 54-65 (rising momentum). The IDEAL RSI for puts is 35-46 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+
+// ── Trend Following Bot ───────────────────────────────────────────────────────
+var trendBot = require('./trend_bot');
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -795,11 +747,6 @@ async function scanTicker(ticker, settings, marketTrend) {
   if (rsi < 30) {
     await addLog('skip', ticker + ' RSI ' + rsi + ' oversold (<30) — bounce risk, skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI oversold', d: d };
-  }
-  // RSI 50 = neutral — block entries in both directions at exact boundary
-  if (rsi === 50) {
-    await addLog('skip', ticker + ' RSI exactly 50 — neutral zone, no directional edge, skipping Claude');
-    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI neutral', d: d };
   }
 
   // 2. Wide spread — too expensive to trade profitably
@@ -1287,15 +1234,6 @@ async function runEngine() {
     results.push(result);
   }
 
-  // ── Same-ticker cooldown — prevent re-entering same ticker within 5 minutes ──
-  var recentTickers = {};
-  try {
-    var recentRows = await pool.query(
-      "SELECT ticker, ts FROM trades WHERE ts > NOW() - INTERVAL '5 minutes' ORDER BY ts DESC"
-    );
-    recentRows.rows.forEach(function(r) { recentTickers[r.ticker.toUpperCase()] = true; });
-  } catch(rte) { console.error('recent ticker check error:', rte.message); }
-
   // HIGH confidence only — MEDIUM signals have poor historical win rate
   var signals = results.filter(function(r) {
     if (r.signal !== 'BUY_CALL' && r.signal !== 'BUY_PUT') return false;
@@ -1305,10 +1243,6 @@ async function runEngine() {
     if (spyTrend.trend === 'DOWN' && r.signal === 'BUY_CALL') { return false; }
     // Fix 2: Block any ticker already held
     if (heldTickers[r.ticker.toUpperCase()]) {
-      return false;
-    }
-    // Fix 3: Block any ticker traded in the last 5 minutes — prevent rapid re-entry
-    if (recentTickers[r.ticker.toUpperCase()]) {
       return false;
     }
     return true;
@@ -2035,6 +1969,25 @@ pool.connect()
     app.listen(PORT, function() { console.log('running on port ' + PORT); });
     scheduleMidnightReset();
     scheduleMarketOpenRestart();
+
+    // ── Initialize trend following bot ────────────────────────────────────────
+    trendBot.initTrendDB().then(function() {
+      trendBot.registerTrendRoutes(app);
+      // Monitor open trend positions every 30 minutes during market hours
+      setInterval(function() {
+        var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        var hour = etNow.getHours();
+        var isWeekday = etNow.getDay() >= 1 && etNow.getDay() <= 5;
+        if (isWeekday && hour >= 9 && hour < 16) {
+          trendBot.monitorTrendPositions().catch(console.error);
+        }
+      }, 30 * 60 * 1000); // every 30 minutes
+      // Daily trend scan check every minute (bot decides internally if it's scan time)
+      setInterval(function() {
+        trendBot.runTrendScan().catch(console.error);
+      }, 60 * 1000); // every minute (bot only actually scans at 10am)
+      console.log('Trend bot initialized and running');
+    }).catch(function(e) { console.error('Trend bot init error:', e.message); });
 
     // ── Smart startup: auto-restart engine if market is open and engine was running ──
     // Handles Railway redeploys and server restarts without manual intervention
