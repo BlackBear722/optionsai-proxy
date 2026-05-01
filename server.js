@@ -2008,7 +2008,19 @@ if(checks.every(function(c){return c.m;}))document.getElementById('gl').style.di
   } catch(e) { res.status(500).send('Dashboard error: ' + e.message); }
 });
 
-app.get('/', function(req, res) { res.sendFile(__dirname + '/public/index.html'); });
+app.get('/trend/sync-session', async function(req, res) {
+  var session = await getState('session', null);
+  if (session) res.json({ ok: true, accountId: session.accountId });
+  else res.json({ ok: false, message: 'No session' });
+});
+
+app.get('/trend/dashboard', async function(req, res) {
+  res.send('<h1>Trend Bot is working!</h1>');
+});
+
+app.post('/trend/scan', async function(req, res) {
+  res.json({ message: 'Scan triggered' });
+});app.get('/', function(req, res) { res.sendFile(__dirname + '/public/index.html'); });
 
 var PORT = process.env.PORT || 3001;
 pool.connect()
