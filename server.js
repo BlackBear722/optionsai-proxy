@@ -171,7 +171,9 @@ function buildSymbol(ticker, type, strike) {
 
 // Calculate real 14-period RSI from an array of closing prices
 function calcRSI(closes) {
-  if (!closes || closes.length < 15) return 50;
+  if (!closes || closes.length < 3) return 50;
+  // Use available candles even if fewer than 15 — partial RSI is better than defaulting to 50
+  var period = Math.min(14, closes.length - 1);
   var gains = 0, losses = 0;
   for (var i = closes.length - 14; i < closes.length; i++) {
     var diff = closes[i] - closes[i - 1];
@@ -262,15 +264,64 @@ async function fetchQuote(ticker) {
             var lows   = candles.map(function(c) { return parseFloat(c.low);   }).filter(function(v) { return !isNaN(v); });
             var vols   = candles.map(function(c) { return parseFloat(c.volume);}).filter(function(v) { return !isNaN(v); });
 
-            if (closes.length >= 15) rsi = calcRSI(closes);
+            if (closes.length >= 15) {
+              rsi = calcRSI(closes);
+            } else {
+              // Not enough Tradier candles for reliable RSI — fetch Yahoo 5d history
+              try {
+                var yr = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
+                  headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+                });
+                var yd = await yr.json();
+                var yr2 = yd && yd.chart && yd.chart.result && yd.chart.result[0];
+                var yq = yr2 && yr2.indicators && yr2.indicators.quote && yr2.indicators.quote[0];
+                if (yq && yq.close) {
+                  var yc = yq.close.filter(function(v) { return v != null && !isNaN(v); });
+                  if (yc.length >= 15) {
+                    rsi = calcRSI(yc);
+                    console.log(ticker + ' RSI from Yahoo 5d (' + yc.length + ' candles): ' + rsi);
+                  } else {
+                    rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                  }
+                } else {
+                  rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                }
+              } catch(ye) {
+                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+              }
+            }
             if (closes.length > 0)   vwap = calcVWAP(closes, highs, lows, vols).toFixed(2);
             bull = countConsecutive(opens, closes, 'bull');
             bear = countConsecutive(opens, closes, 'bear');
             console.log('5-min candles: ' + candles.length + ' RSI:' + rsi + ' VWAP:' + vwap + ' bull:' + bull + ' bear:' + bear);
           } else {
-            // Not enough candles yet (early in day) — fall back to day-change estimate
-            rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 52 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
-            console.log('No 5-min candles yet for ' + ticker + ' — using fallback RSI:' + rsi);
+            // No candles at all — fetch Yahoo 5d for full data
+            try {
+              var yr0 = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=5m&range=5d', {
+                headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }
+              });
+              var yd0 = await yr0.json();
+              var yr02 = yd0 && yd0.chart && yd0.chart.result && yd0.chart.result[0];
+              var yq0 = yr02 && yr02.indicators && yr02.indicators.quote && yr02.indicators.quote[0];
+              if (yq0 && yq0.close) {
+                var yc0 = yq0.close.filter(function(v) { return v != null && !isNaN(v); });
+                var yo0 = (yq0.open   || []).filter(function(v) { return v != null && !isNaN(v); });
+                var yh0 = (yq0.high   || []).filter(function(v) { return v != null && !isNaN(v); });
+                var yl0 = (yq0.low    || []).filter(function(v) { return v != null && !isNaN(v); });
+                var yv0 = (yq0.volume || []).filter(function(v) { return v != null && !isNaN(v); });
+                if (yc0.length >= 15) rsi = calcRSI(yc0);
+                else rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+                if (yc0.length > 0) vwap = calcVWAP(yc0, yh0, yl0, yv0).toFixed(2);
+                bull = countConsecutive(yo0, yc0, 'bull');
+                bear = countConsecutive(yo0, yc0, 'bear');
+                console.log(ticker + ' full Yahoo 5d fallback: ' + yc0.length + ' candles RSI:' + rsi);
+              } else {
+                rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+              }
+            } catch(ye0) {
+              rsi = chgPct > 3 ? 65 : chgPct > 1 ? 57 : chgPct > 0 ? 53 : chgPct > -1 ? 47 : chgPct > -3 ? 40 : 35;
+              console.log('No candles for ' + ticker + ' — day-change RSI: ' + rsi);
+            }
           }
         } catch(ce) { console.error('candle parse error ' + ticker + ': ' + ce.message); }
 
@@ -356,9 +407,6 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-
-// ── Trend Following Bot ───────────────────────────────────────────────────────
-var trendBot = require('./trend_bot');
 var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
@@ -1969,25 +2017,6 @@ pool.connect()
     app.listen(PORT, function() { console.log('running on port ' + PORT); });
     scheduleMidnightReset();
     scheduleMarketOpenRestart();
-
-    // ── Initialize trend following bot ────────────────────────────────────────
-    trendBot.initTrendDB().then(function() {
-      trendBot.registerTrendRoutes(app);
-      // Monitor open trend positions every 30 minutes during market hours
-      setInterval(function() {
-        var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-        var hour = etNow.getHours();
-        var isWeekday = etNow.getDay() >= 1 && etNow.getDay() <= 5;
-        if (isWeekday && hour >= 9 && hour < 16) {
-          trendBot.monitorTrendPositions().catch(console.error);
-        }
-      }, 30 * 60 * 1000); // every 30 minutes
-      // Daily trend scan check every minute (bot decides internally if it's scan time)
-      setInterval(function() {
-        trendBot.runTrendScan().catch(console.error);
-      }, 60 * 1000); // every minute (bot only actually scans at 10am)
-      console.log('Trend bot initialized and running');
-    }).catch(function(e) { console.error('Trend bot init error:', e.message); });
 
     // ── Smart startup: auto-restart engine if market is open and engine was running ──
     // Handles Railway redeploys and server restarts without manual intervention
