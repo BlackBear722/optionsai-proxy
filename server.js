@@ -2066,6 +2066,114 @@ async function buildTrendWatchlist() {
   return final;
 }
 
+// ── Trend Position Monitor — runs every 30 min during market hours ─────────
+async function monitorTrendPositions() {
+  try {
+    var openPos = await pool.query("SELECT * FROM trend_positions WHERE status='open'");
+    if (!openPos.rows.length) return;
+    await trendLog('entry', 'Monitoring ' + openPos.rows.length + ' open trend position(s)');
+    for (var i = 0; i < openPos.rows.length; i++) {
+      var pos = openPos.rows[i];
+      try {
+        // Fetch current stock price from Yahoo
+        var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=1d&range=1d', {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        });
+        var data = await r.json();
+        var meta = data && data.chart && data.chart.result && data.chart.result[0] && data.chart.result[0].meta;
+        var currentStockPrice = meta && meta.regularMarketPrice ? parseFloat(meta.regularMarketPrice) : null;
+        if (!currentStockPrice) continue;
+
+        // Estimate option price change based on delta (~0.5 for ATM options)
+        var entryStockPrice = parseFloat(pos.strike) || currentStockPrice;
+        var stockMove = currentStockPrice - entryStockPrice;
+        var estimatedOptionPrice = parseFloat(pos.entry_price) + (stockMove * 0.5);
+        estimatedOptionPrice = Math.max(0.01, estimatedOptionPrice);
+
+        var entryPrice = parseFloat(pos.entry_price);
+        var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100;
+        var pnlPct = ((estimatedOptionPrice - entryPrice) / entryPrice * 100).toFixed(1);
+
+        await trendLog('entry', 'Monitor ' + pos.ticker + ' ' + pos.direction +
+          ': stock=$' + currentStockPrice.toFixed(2) +
+          ' option~$' + estimatedOptionPrice.toFixed(2) +
+          ' PnL=$' + pnlPerContract.toFixed(0) + ' (' + pnlPct + '%)');
+
+        // Check profit target — $200 per contract
+        if (pnlPerContract >= 200) {
+          await pool.query("UPDATE trend_positions SET status='win', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
+          await trendLog('trade', 'PROFIT TARGET HIT: ' + pos.ticker + ' +$' + pnlPerContract.toFixed(0) + ' — closing position');
+          continue;
+        }
+
+        // Check stop loss — 40% of premium paid
+        var stopPrice = entryPrice * 0.60;
+        if (estimatedOptionPrice <= stopPrice) {
+          await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
+          await trendLog('stop', 'STOP LOSS HIT: ' + pos.ticker + ' -$' + Math.abs(pnlPerContract).toFixed(0) + ' — closing position');
+          continue;
+        }
+
+        // Check expiry — exit 7 days before expiry
+        if (pos.expiry) {
+          var expiryDate = new Date(pos.expiry + 'T12:00:00Z');
+          var daysLeft = Math.floor((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+          if (daysLeft <= 7) {
+            var isWin = pnlPerContract > 0;
+            await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWin ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
+            await trendLog(isWin ? 'trade' : 'stop', 'EXPIRY EXIT (' + daysLeft + ' days left): ' + pos.ticker + ' $' + pnlPerContract.toFixed(0));
+          }
+        }
+      } catch(posErr) { console.error('Monitor position error:', posErr.message); }
+    }
+  } catch(e) { console.error('monitorTrendPositions error:', e.message); }
+}
+
+async function runTrendScanLogic() {
+  var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var todayStr = etNow.toLocaleDateString('en-CA');
+  await trendLog('entry', 'Trend scan running — ' + todayStr);
+  var openPos = await pool.query("SELECT COUNT(*) FROM trend_positions WHERE status='open'");
+  if (parseInt(openPos.rows[0].count) >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
+  var spyData = await fetchDailyCandles('SPY');
+  var spyTrend2 = spyData ? spyData.trend : 'UNKNOWN';
+  await trendLog('entry', 'SPY daily trend: ' + spyTrend2);
+  var watchlist2 = await buildTrendWatchlist();
+  var expDate = new Date(); expDate.setDate(expDate.getDate() + 35);
+  while (expDate.getDay() === 0 || expDate.getDay() === 6) expDate.setDate(expDate.getDate() + 1);
+  var expiry = expDate.getFullYear() + '-' + ('0'+(expDate.getMonth()+1)).slice(-2) + '-' + ('0'+expDate.getDate()).slice(-2);
+  for (var i = 0; i < watchlist2.length; i++) {
+    var ticker = watchlist2[i];
+    var d2 = await fetchDailyCandles(ticker);
+    if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
+    await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
+    if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat — no clear MA direction'); continue; }
+    if (d2.rsi > 75 || d2.rsi < 25) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme'); continue; }
+    if (spyTrend2 !== 'UNKNOWN' && spyTrend2 !== 'FLAT' && d2.trend !== spyTrend2) { await trendLog('skip', ticker + ' trend conflicts SPY'); continue; }
+    var msg = 'Ticker: ' + ticker + '\nPrice: $' + d2.price + '\n20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 +
+      '\nRSI: ' + d2.rsi + ' | Trend: ' + d2.trend + ' | Near 20MA: ' + d2.nearMa20 +
+      '\nWeek chg: ' + d2.weekChgPct + '% | SPY trend: ' + spyTrend2 +
+      '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium\nRespond with TREND_RESULT.';
+    var result2 = await callTrendClaude(msg);
+    if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
+    await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
+    if (result2.confidence === 'HIGH') {
+      var targetPrice = result2.premium + 2.00;
+      var stopPrice2 = result2.premium * 0.60;
+      await pool.query(
+        'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        [ticker, result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT', result2.strike, result2.expiry || expiry,
+         result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice2.toFixed(2), result2.reason]
+      );
+      await trendLog('trade', 'OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' entry=$' + result2.premium + ' target=$' + targetPrice.toFixed(2) + ' stop=$' + stopPrice2.toFixed(2));
+      break;
+    }
+    await new Promise(function(r3) { setTimeout(r3, 1000); });
+  }
+  await trendLog('entry', 'Scan complete');
+  trendLastScan = todayStr;
+}
+
 async function runTrendScan() {
   try {
     var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2075,45 +2183,7 @@ async function runTrendScan() {
     if (!(hour === 10 && min === 0)) return;
     var todayStr = etNow.toLocaleDateString('en-CA');
     if (trendLastScan === todayStr) return;
-    trendLastScan = todayStr;
-    await trendLog('entry', 'Daily trend scan starting — ' + todayStr);
-    var openPos = await pool.query("SELECT COUNT(*) FROM trend_positions WHERE status='open'");
-    if (parseInt(openPos.rows[0].count) >= 2) { await trendLog('skip', 'Max positions reached'); return; }
-    var spyData = await fetchDailyCandles('SPY');
-    var spyTrend2 = spyData ? spyData.trend : 'UNKNOWN';
-    await trendLog('entry', 'SPY daily trend: ' + spyTrend2);
-    var watchlist2 = await buildTrendWatchlist();
-    var expDate = new Date(); expDate.setDate(expDate.getDate() + 35);
-    while (expDate.getDay() === 0 || expDate.getDay() === 6) expDate.setDate(expDate.getDate() + 1);
-    var expiry = expDate.getFullYear() + '-' + ('0'+(expDate.getMonth()+1)).slice(-2) + '-' + ('0'+expDate.getDate()).slice(-2);
-    for (var i = 0; i < watchlist2.length; i++) {
-      var ticker = watchlist2[i];
-      var d2 = await fetchDailyCandles(ticker);
-      if (!d2) continue;
-      if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat trend'); continue; }
-      if (d2.rsi > 75 || d2.rsi < 25) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme'); continue; }
-      if (spyTrend2 !== 'UNKNOWN' && spyTrend2 !== 'FLAT' && d2.trend !== spyTrend2) { await trendLog('skip', ticker + ' conflicts SPY'); continue; }
-      var msg = 'Ticker: ' + ticker + '\nPrice: $' + d2.price + '\n20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 +
-        '\nRSI: ' + d2.rsi + ' | Trend: ' + d2.trend + ' | Near 20MA: ' + d2.nearMa20 +
-        '\nWeek chg: ' + d2.weekChgPct + '% | SPY trend: ' + spyTrend2 +
-        '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium\nRespond with TREND_RESULT.';
-      await trendLog('entry', 'Analyzing ' + ticker + ' trend:' + d2.trend + ' RSI:' + d2.rsi);
-      var result2 = await callTrendClaude(msg);
-      if (!result2) continue;
-      await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Trend ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
-      if (result2.confidence === 'HIGH') {
-        var targetPrice = result2.premium + 2.00;
-        var stopPrice = result2.premium * 0.60;
-        await pool.query(
-          'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-          [ticker, result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT', result2.strike, result2.expiry || expiry,
-           result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice.toFixed(2), result2.reason]
-        );
-        await trendLog('trade', 'TREND OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' $' + result2.premium + ' target=$' + targetPrice.toFixed(2));
-        break;
-      }
-      await new Promise(function(res3) { setTimeout(res3, 1000); });
-    }
+    await runTrendScanLogic();
   } catch(e) { console.error('runTrendScan error:', e.message); }
 }
 
@@ -2124,17 +2194,22 @@ app.get('/trend/dashboard', async function(req, res) {
     var positions = await pool.query('SELECT * FROM trend_positions ORDER BY entered_at DESC LIMIT 20');
     var stats = await pool.query("SELECT COUNT(*) FILTER (WHERE status='open') as open_pos, COUNT(*) FILTER (WHERE status='win') as wins, COUNT(*) FILTER (WHERE status='loss') as losses, COALESCE(SUM(pnl) FILTER (WHERE status IN ('win','loss')),0) as total_pnl FROM trend_positions");
     var logs2 = await pool.query('SELECT * FROM trend_logs ORDER BY ts DESC LIMIT 30');
-    var s = stats.rows[0];
-    var total = parseInt(s.wins) + parseInt(s.losses);
-    var wr2 = total > 0 ? (parseInt(s.wins)/total*100).toFixed(1) : '0';
-    var pnl2 = parseFloat(s.total_pnl) || 0;
-    var data3 = { positions: positions.rows, stats: s, winRate: wr2, logs: logs2.rows };
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Trend Bot</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}.mv{font-size:22px;font-weight:500}.pos{color:#1D9E75}.neg{color:#E24B4A}.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:12px}.tr{display:grid;grid-template-columns:80px 60px 50px 60px 70px 1fr;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid #2a2a2a}.th{font-size:11px;color:#666}.badge{padding:2px 8px;border-radius:999px;font-size:11px}.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}.log{font-size:11px;color:#888;padding:4px 0;border-bottom:1px solid #1a1a1a}</style></head><body>
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Scans daily at 10am ET</p></div><button style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;cursor:pointer" onclick="location.reload()">Refresh</button></div>
+    var s2 = stats.rows[0];
+    var total2 = parseInt(s2.wins) + parseInt(s2.losses);
+    var wr2 = total2 > 0 ? (parseInt(s2.wins)/total2*100).toFixed(1) : '0';
+    var data3 = { positions: positions.rows, stats: s2, winRate: wr2, logs: logs2.rows };
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Trend Bot</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}.mv{font-size:22px;font-weight:500}.pos{color:#1D9E75}.neg{color:#E24B4A}.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:12px}.tr{display:grid;grid-template-columns:80px 60px 50px 60px 70px 1fr;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid #2a2a2a}.th{font-size:11px;color:#666}.badge{padding:2px 8px;border-radius:999px;font-size:11px}.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}.log{font-size:11px;color:#888;padding:4px 0;border-bottom:1px solid #1a1a1a}.rb{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;cursor:pointer}</style></head><body>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+  <div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Monitors every 30min | Scans daily at 10am ET</p></div>
+  <div style="display:flex;gap:8px">
+    <a href="/combined" style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;text-decoration:none">Combined View</a>
+    <button class="rb" onclick="location.reload()">Refresh</button>
+  </div>
+</div>
 <div class="g4"><div class="metric"><div class="ml">Total P&L</div><div class="mv" id="spnl">-</div></div><div class="metric"><div class="ml">Win Rate</div><div class="mv" id="swr">-</div></div><div class="metric"><div class="ml">Open</div><div class="mv" id="sop">-</div></div><div class="metric"><div class="ml">W / L</div><div class="mv" id="swl">-</div></div></div>
 <div class="card"><div class="ct">Positions</div><div class="tr th"><span>Date</span><span>Ticker</span><span>Dir</span><span>Status</span><span>P&L</span><span>Reason</span></div><div id="tb"></div></div>
 <div class="card"><div class="ct">Recent Logs</div><div id="lb"></div></div>
-<p style="font-size:12px;color:#666;margin-top:8px">Next scan: tomorrow at 10:00am ET | <a href="#" style="color:#1D9E75" onclick="fetch('/trend/scan',{method:'POST'});alert('Scan triggered — check logs in 30 seconds');return false">Force scan now</a></p>
+<p style="font-size:12px;color:#666;margin-top:8px">Next auto-scan: tomorrow at 10:00am ET | <a href="#" style="color:#1D9E75" onclick="fetch('/trend/scan',{method:'POST'}).then(function(){alert('Scan triggered — refresh in 30 seconds');});return false">Force scan now</a></p>
 <script>
 var D=` + JSON.stringify(data3) + `;
 var s=D.stats,pnl=parseFloat(s.total_pnl)||0;
@@ -2143,7 +2218,7 @@ document.getElementById('swr').textContent=D.winRate+'%';
 document.getElementById('sop').textContent=s.open_pos+'/2';
 document.getElementById('swl').textContent=s.wins+' / '+s.losses;
 var tb=document.getElementById('tb');
-tb.innerHTML=D.positions.length?D.positions.map(function(p){var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});var pnl2=parseFloat(p.pnl)||0;var badge=p.status==='open'?'<span class="badge bo">Open</span>':p.status==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';var pstr=p.status==='open'?'<span style="color:#666">watching</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(0)+'</span>';return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span>'+badge+pstr+'<span style="color:#666;font-size:11px">'+(p.reason||'').slice(0,40)+'</span></div>';}).join(''):'<div style="text-align:center;color:#666;padding:20px;font-size:13px">No positions yet — next scan at 10am ET</div>';
+tb.innerHTML=D.positions.length?D.positions.map(function(p){var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});var pnl2=parseFloat(p.pnl)||0;var badge=p.status==='open'?'<span class="badge bo">Open</span>':p.status==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';var pstr=p.status==='open'?'<span style="color:#666">watching</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(0)+'</span>';return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span>'+badge+pstr+'<span style="color:#666;font-size:11px">'+(p.reason||'').slice(0,40)+'</span></div>';}).join(''):'<div style="text-align:center;color:#666;padding:20px;font-size:13px">No positions yet</div>';
 document.getElementById('lb').innerHTML=D.logs.map(function(l){return'<div class="log">'+new Date(l.ts).toLocaleTimeString()+' ['+l.type+'] '+l.message+'</div>';}).join('');
 <\/script></body></html>`);
   } catch(e) { res.status(500).send('Error: ' + e.message); }
@@ -2164,53 +2239,145 @@ app.get('/trend/sync-session', async function(req, res) {
 });
 
 app.post('/trend/scan', async function(req, res) {
-  // Force scan — bypass time check by running scan logic directly
   res.json({ message: 'Trend scan triggered — refresh dashboard in 30 seconds' });
+  runTrendScanLogic().catch(function(e) { console.error('Force scan error:', e.message); });
+});
+
+// ── Combined Dashboard — both bots on one page ────────────────────────────────
+app.get('/combined', async function(req, res) {
   try {
-    var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    var todayStr = etNow.toLocaleDateString('en-CA');
-    trendLastScan = null; // reset so runTrendScan won't skip
-    await trendLog('entry', 'Manual scan triggered');
-    var openPos = await pool.query("SELECT COUNT(*) FROM trend_positions WHERE status='open'");
-    if (parseInt(openPos.rows[0].count) >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
-    var spyData = await fetchDailyCandles('SPY');
-    var spyTrend2 = spyData ? spyData.trend : 'UNKNOWN';
-    await trendLog('entry', 'SPY daily trend: ' + spyTrend2);
-    var watchlist2 = await buildTrendWatchlist();
-    var expDate = new Date(); expDate.setDate(expDate.getDate() + 35);
-    while (expDate.getDay() === 0 || expDate.getDay() === 6) expDate.setDate(expDate.getDate() + 1);
-    var expiry = expDate.getFullYear() + '-' + ('0'+(expDate.getMonth()+1)).slice(-2) + '-' + ('0'+expDate.getDate()).slice(-2);
-    for (var i = 0; i < watchlist2.length; i++) {
-      var ticker = watchlist2[i];
-      var d2 = await fetchDailyCandles(ticker);
-      if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
-      await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
-      if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat trend — no clear MA direction'); continue; }
-      if (d2.rsi > 75 || d2.rsi < 25) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme'); continue; }
-      if (spyTrend2 !== 'UNKNOWN' && spyTrend2 !== 'FLAT' && d2.trend !== spyTrend2) { await trendLog('skip', ticker + ' trend ' + d2.trend + ' conflicts SPY ' + spyTrend2); continue; }
-      var msg = 'Ticker: ' + ticker + '\nPrice: $' + d2.price + '\n20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 +
-        '\nRSI: ' + d2.rsi + ' | Trend: ' + d2.trend + ' | Near 20MA: ' + d2.nearMa20 +
-        '\nWeek chg: ' + d2.weekChgPct + '% | SPY trend: ' + spyTrend2 +
-        '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium\nRespond with TREND_RESULT.';
-      var result2 = await callTrendClaude(msg);
-      if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
-      await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
-      if (result2.confidence === 'HIGH') {
-        var targetPrice = result2.premium + 2.00;
-        var stopPrice = result2.premium * 0.60;
-        await pool.query(
-          'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-          [ticker, result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT', result2.strike, result2.expiry || expiry,
-           result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice.toFixed(2), result2.reason]
-        );
-        await trendLog('trade', 'OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' entry=$' + result2.premium + ' target=$' + targetPrice.toFixed(2) + ' stop=$' + stopPrice.toFixed(2));
-        break;
-      }
-      await new Promise(function(r3) { setTimeout(r3, 1000); });
-    }
-    await trendLog('entry', 'Scan complete');
-    trendLastScan = todayStr;
-  } catch(e) { console.error('Force scan error:', e.message); await trendLog('stop', 'Scan error: ' + e.message); }
+    // Scalping bot data
+    var scalperTrades = await pool.query('SELECT * FROM trades ORDER BY ts DESC');
+    var closed = scalperTrades.rows.filter(function(t){return t.result==='win'||t.result==='loss';});
+    var scalperWins = closed.filter(function(t){return t.result==='win';});
+    var scalperLosses = closed.filter(function(t){return t.result==='loss';});
+    var scalperPnl = closed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var scalperWr = closed.length ? (scalperWins.length/closed.length*100).toFixed(1) : '0';
+    var scalperOpen = scalperTrades.rows.filter(function(t){return t.result==='open';}).length;
+    var recentScalper = scalperTrades.rows.slice(0,5);
+
+    // Trend bot data
+    var trendTrades = await pool.query('SELECT * FROM trend_positions ORDER BY entered_at DESC');
+    var trendClosed = trendTrades.rows.filter(function(t){return t.status==='win'||t.status==='loss';});
+    var trendWins = trendClosed.filter(function(t){return t.status==='win';});
+    var trendLosses = trendClosed.filter(function(t){return t.status==='loss';});
+    var trendPnl = trendClosed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var trendWr = trendClosed.length ? (trendWins.length/trendClosed.length*100).toFixed(1) : '0';
+    var trendOpenPos = trendTrades.rows.filter(function(t){return t.status==='open';});
+
+    // Engine state
+    var engineOn = await getState('engineOn', false);
+    var dailyProfit = await getState('dailyProfit', 0);
+    var dailyLoss = await getState('dailyLoss', 0);
+
+    var combined = {
+      scalper: { pnl: scalperPnl.toFixed(2), wr: scalperWr, wins: scalperWins.length, losses: scalperLosses.length, open: scalperOpen, recent: recentScalper, trades: closed.length },
+      trend: { pnl: trendPnl.toFixed(2), wr: trendWr, wins: trendWins.length, losses: trendLosses.length, openPositions: trendOpenPos, trades: trendClosed.length },
+      engine: { on: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss },
+      totalPnl: (scalperPnl + trendPnl).toFixed(2)
+    };
+
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>OptionsAI — Combined</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}
+h1{font-size:22px;font-weight:500;color:#fff;margin-bottom:4px}.sub{font-size:12px;color:#666;margin-bottom:20px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.g2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:16px}
+.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}
+.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}.mv{font-size:22px;font-weight:500}
+.pos{color:#1D9E75}.neg{color:#E24B4A}.neu{color:#fff}
+.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:0}
+.ch{font-size:13px;font-weight:500;color:#fff;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:10px}
+.tr{display:grid;grid-template-columns:70px 55px 45px 55px 55px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid #1f1f1f}
+.tr:last-child{border-bottom:none}.th{color:#555}
+.badge{padding:2px 7px;border-radius:999px;font-size:10px;font-weight:500}
+.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.don{background:#1D9E75}.dof{background:#555}
+.rb{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:6px 14px;font-size:12px;color:#e8e8e8;cursor:pointer;text-decoration:none;display:inline-block}
+.rb:hover{background:#222}
+.divider{width:100%;height:1px;background:#2a2a2a;margin:16px 0}
+@media(max-width:600px){.g3{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}}
+</style></head><body>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
+  <div>
+    <h1>OptionsAI</h1>
+    <div class="sub">Combined dashboard — scalping bot + trend following bot</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span class="dot" id="ed"></span>
+    <span id="el" style="font-size:12px;color:#888"></span>
+    <button class="rb" onclick="location.reload()">Refresh</button>
+  </div>
+</div>
+
+<div class="g3">
+  <div class="metric"><div class="ml">Combined P&L</div><div class="mv" id="cpnl">-</div></div>
+  <div class="metric"><div class="ml">Today Scalper</div><div class="mv" id="ctd">-</div></div>
+  <div class="metric"><div class="ml">Trend Positions</div><div class="mv neu" id="ctp">-</div></div>
+</div>
+
+<div class="g2">
+  <div class="card">
+    <div class="ch"><span class="dot don"></span> Scalping Bot <span style="font-size:11px;color:#666;font-weight:400">— 5-min options</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+      <div><div class="ct">P&L</div><div style="font-size:16px;font-weight:500" id="spnl">-</div></div>
+      <div><div class="ct">Win Rate</div><div style="font-size:16px;font-weight:500" id="swr">-</div></div>
+      <div><div class="ct">Trades</div><div style="font-size:16px;font-weight:500;color:#fff" id="str">-</div></div>
+    </div>
+    <div class="ct">Recent Trades</div>
+    <div class="tr th"><span>Time</span><span>Ticker</span><span>Type</span><span>Result</span><span>P&L</span></div>
+    <div id="stb"></div>
+    <div style="margin-top:12px"><a href="/dashboard" class="rb">Full Dashboard →</a></div>
+  </div>
+
+  <div class="card">
+    <div class="ch"><span class="dot" style="background:#BA7517"></span> Trend Bot <span style="font-size:11px;color:#666;font-weight:400">— 35-day options</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+      <div><div class="ct">P&L</div><div style="font-size:16px;font-weight:500" id="tpnl">-</div></div>
+      <div><div class="ct">Win Rate</div><div style="font-size:16px;font-weight:500" id="twr">-</div></div>
+      <div><div class="ct">Trades</div><div style="font-size:16px;font-weight:500;color:#fff" id="ttr">-</div></div>
+    </div>
+    <div class="ct">Open Positions</div>
+    <div id="ttb"></div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <a href="/trend/dashboard" class="rb">Trend Dashboard →</a>
+      <a href="#" class="rb" onclick="fetch('/trend/scan',{method:'POST'}).then(function(){alert('Scan triggered!');});return false">Force Scan</a>
+    </div>
+  </div>
+</div>
+
+<script>
+var D=` + JSON.stringify(combined) + `;
+// Engine status
+document.getElementById('ed').className='dot '+(D.engine.on?'don':'dof');
+document.getElementById('el').textContent=D.engine.on?'Scalper running':'Scalper off';
+// Combined PnL
+var cp=parseFloat(D.totalPnl)||0;
+var cpe=document.getElementById('cpnl');cpe.textContent=(cp>=0?'+':'')+'$'+Math.abs(cp).toFixed(2);cpe.className='mv '+(cp>0?'pos':cp<0?'neg':'neu');
+// Today scalper
+var td=(parseFloat(D.engine.dailyProfit)||0)-(parseFloat(D.engine.dailyLoss)||0);
+var tde=document.getElementById('ctd');tde.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);tde.className='mv '+(td>0?'pos':td<0?'neg':'neu');
+// Trend open positions
+document.getElementById('ctp').textContent=D.trend.openPositions.length+'/2';
+// Scalper stats
+var sp=parseFloat(D.scalper.pnl)||0;
+var spe=document.getElementById('spnl');spe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);spe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';
+var swr=parseFloat(D.scalper.wr)||0;
+var swe=document.getElementById('swr');swe.textContent=D.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';
+document.getElementById('str').textContent=D.scalper.trades;
+var stb=document.getElementById('stb');
+stb.innerHTML=D.scalper.recent.length?D.scalper.recent.map(function(t){var ts=new Date(t.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});var pnl2=parseFloat(t.pnl)||0;var badge=t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';var pstr=t.result==='open'?'<span style="color:#666">—</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+';font-size:11px">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(2)+'</span>';return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+'</div>';}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet</div>';
+// Trend stats
+var tp=parseFloat(D.trend.pnl)||0;
+var tpe=document.getElementById('tpnl');tpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);tpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';
+var twr=parseFloat(D.trend.wr)||0;
+var twe=document.getElementById('twr');twe.textContent=D.trend.trades>0?twr.toFixed(1)+'%':'—';twe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';
+document.getElementById('ttr').textContent=D.trend.trades;
+var ttb=document.getElementById('ttb');
+ttb.innerHTML=D.trend.openPositions.length?D.trend.openPositions.map(function(p){var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span><span class="badge bo">Open</span><span style="color:#666">watching</span></div>';}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — next scan at 10am ET</div>';
+<\/script></body></html>`);
+  } catch(e) { res.status(500).send('Combined dashboard error: ' + e.message); }
 });
 
 app.get('/', function(req, res) { res.sendFile(__dirname + '/public/index.html'); });
@@ -2223,10 +2390,16 @@ pool.connect()
     scheduleMidnightReset();
     scheduleMarketOpenRestart();
     initTrendDB().then(function() {
+      // Check for trend scan every minute (only fires at 10am)
+      setInterval(function() { runTrendScan().catch(console.error); }, 60 * 1000);
+      // Monitor open trend positions every 30 minutes during market hours
       setInterval(function() {
-        runTrendScan().catch(console.error);
-      }, 60 * 1000);
-      console.log('Trend bot initialized');
+        var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
+        var h = etNow.getHours();
+        if (isWd && h >= 9 && h < 16) monitorTrendPositions().catch(console.error);
+      }, 30 * 60 * 1000);
+      console.log('Trend bot initialized — scans at 10am ET, monitors every 30min');
     }).catch(function(e) { console.error('Trend init error:', e.message); });
 
     // ── Smart startup: auto-restart engine if market is open and engine was running ──
