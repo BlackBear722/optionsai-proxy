@@ -2164,9 +2164,53 @@ app.get('/trend/sync-session', async function(req, res) {
 });
 
 app.post('/trend/scan', async function(req, res) {
-  trendLastScan = null;
-  runTrendScan().catch(console.error);
-  res.json({ message: 'Trend scan triggered — check /trend/dashboard for results in ~30 seconds' });
+  // Force scan — bypass time check by running scan logic directly
+  res.json({ message: 'Trend scan triggered — refresh dashboard in 30 seconds' });
+  try {
+    var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    var todayStr = etNow.toLocaleDateString('en-CA');
+    trendLastScan = null; // reset so runTrendScan won't skip
+    await trendLog('entry', 'Manual scan triggered');
+    var openPos = await pool.query("SELECT COUNT(*) FROM trend_positions WHERE status='open'");
+    if (parseInt(openPos.rows[0].count) >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
+    var spyData = await fetchDailyCandles('SPY');
+    var spyTrend2 = spyData ? spyData.trend : 'UNKNOWN';
+    await trendLog('entry', 'SPY daily trend: ' + spyTrend2);
+    var watchlist2 = await buildTrendWatchlist();
+    var expDate = new Date(); expDate.setDate(expDate.getDate() + 35);
+    while (expDate.getDay() === 0 || expDate.getDay() === 6) expDate.setDate(expDate.getDate() + 1);
+    var expiry = expDate.getFullYear() + '-' + ('0'+(expDate.getMonth()+1)).slice(-2) + '-' + ('0'+expDate.getDate()).slice(-2);
+    for (var i = 0; i < watchlist2.length; i++) {
+      var ticker = watchlist2[i];
+      var d2 = await fetchDailyCandles(ticker);
+      if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
+      await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
+      if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat trend — no clear MA direction'); continue; }
+      if (d2.rsi > 75 || d2.rsi < 25) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme'); continue; }
+      if (spyTrend2 !== 'UNKNOWN' && spyTrend2 !== 'FLAT' && d2.trend !== spyTrend2) { await trendLog('skip', ticker + ' trend ' + d2.trend + ' conflicts SPY ' + spyTrend2); continue; }
+      var msg = 'Ticker: ' + ticker + '\nPrice: $' + d2.price + '\n20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 +
+        '\nRSI: ' + d2.rsi + ' | Trend: ' + d2.trend + ' | Near 20MA: ' + d2.nearMa20 +
+        '\nWeek chg: ' + d2.weekChgPct + '% | SPY trend: ' + spyTrend2 +
+        '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium\nRespond with TREND_RESULT.';
+      var result2 = await callTrendClaude(msg);
+      if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
+      await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
+      if (result2.confidence === 'HIGH') {
+        var targetPrice = result2.premium + 2.00;
+        var stopPrice = result2.premium * 0.60;
+        await pool.query(
+          'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+          [ticker, result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT', result2.strike, result2.expiry || expiry,
+           result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice.toFixed(2), result2.reason]
+        );
+        await trendLog('trade', 'OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' entry=$' + result2.premium + ' target=$' + targetPrice.toFixed(2) + ' stop=$' + stopPrice.toFixed(2));
+        break;
+      }
+      await new Promise(function(r3) { setTimeout(r3, 1000); });
+    }
+    await trendLog('entry', 'Scan complete');
+    trendLastScan = todayStr;
+  } catch(e) { console.error('Force scan error:', e.message); await trendLog('stop', 'Scan error: ' + e.message); }
 });
 
 app.get('/', function(req, res) { res.sendFile(__dirname + '/public/index.html'); });
