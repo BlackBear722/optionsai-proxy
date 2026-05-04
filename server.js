@@ -356,7 +356,7 @@ app.get('/quote/:ticker', async function(req, res) {
 
 // Claude scan — using Haiku for cost efficiency (~20x cheaper than Sonnet, same quality for structured decisions)
 var CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
-var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
+var SCAN_SYSTEM = 'You are an options scalping bot analyzing 5-minute candle data. Use RSI, VWAP, candle momentum, AND the broad market trend to find high-probability setups.\n\nRSI RULES (STRICT — HARD LIMITS):\n- BUY_CALL: RSI must be between 50-70. NEVER enter a call if RSI is above 70 (overbought) or below 50 (no upside momentum).\n- BUY_PUT: RSI must be between 30-50. NEVER enter a put if RSI is below 30 (oversold — snap-back risk) or above 50 (no downside momentum).\n- RSI below 30 = deeply oversold = bounce imminent = DO NOT enter puts\n- RSI above 70 = deeply overbought = reversal imminent = DO NOT enter calls\n- The IDEAL RSI for calls is 52-65 (rising momentum). The IDEAL RSI for puts is 35-48 (falling momentum).\n\nENTRY RULES:\n- BUY_CALL: RSI 50-70, price above VWAP by 0.2%+, 3+ consecutive bull candles, positive day change, market trend UP\n- BUY_PUT: RSI 30-50, price below VWAP by 0.2%+, 3+ consecutive bear candles, negative day change, market trend DOWN\n- HIGH confidence: ALL conditions clearly met including RSI in ideal range\n- NONE: RSI outside allowed range (below 30 for puts, above 70 for calls), ANY mixed signals, trend disagreement\n- NEVER override RSI hard limits regardless of other conditions\n\n- Strike = nearest whole dollar to current price. Premium = 0.5 to 2 percent of stock price. NEVER suggest a premium above $2.50.\n\nRespond ONLY with: <SCAN_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":500,"premium":1.50,"reason":"brief reason"}</SCAN_RESULT>';
 
 // ── SPY Trend Filter ─────────────────────────────────────────────────────────
 // Three-stage trend detection:
@@ -1343,6 +1343,31 @@ async function runEngine() {
       return Object.assign({}, r, { score: total });
     });
     scored.sort(function(a, b) { return b.score - a.score; });
+
+    // Filter: minimum score of 60 required — low score = weak setup
+    scored = scored.filter(function(r) {
+      if (r.score < 60) {
+        addLog('skip', r.ticker + ' score ' + r.score.toFixed(0) + ' too low (<60) — skipping');
+        return false;
+      }
+      return true;
+    });
+
+    // Filter: max premium $2.50 — higher premiums mean larger stop losses
+    scored = scored.filter(function(r) {
+      var prem = parseFloat(r.premium) || 0;
+      if (prem > 2.50) {
+        addLog('skip', r.ticker + ' premium $' + prem + ' too high (>$2.50) — skipping');
+        return false;
+      }
+      return true;
+    });
+
+    if (scored.length === 0) {
+      await addLog('skip', 'no signals passed score/premium filters');
+      return;
+    }
+
     var best = scored[0];
     await addLog('trade', 'BEST: ' + best.ticker + ' ' + best.signal + ' score:' + best.score.toFixed(0) + ' @ $' + best.premium);
     // Use 2 contracts for HIGH confidence NVDA setups — best performing ticker (61%+ win rate)
@@ -2174,16 +2199,41 @@ async function runTrendScanLogic() {
   trendLastScan = todayStr;
 }
 
+// Track which scan windows have fired today: { 'YYYY-MM-DD': { s1: bool, s2: bool, s3: bool } }
+var trendScanWindows = {};
+
 async function runTrendScan() {
   try {
     var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
     var hour = etNow.getHours(), min = etNow.getMinutes();
     if (!isWd || hour < 9 || hour >= 16) return;
-    if (!(hour === 10 && min === 0)) return;
+
     var todayStr = etNow.toLocaleDateString('en-CA');
-    if (trendLastScan === todayStr) return;
-    await runTrendScanLogic();
+    if (!trendScanWindows[todayStr]) trendScanWindows[todayStr] = { s1: false, s2: false, s3: false };
+    var w = trendScanWindows[todayStr];
+
+    // Scan 1: 10:00am ET
+    if (hour === 10 && min === 0 && !w.s1) {
+      w.s1 = true;
+      await trendLog('entry', '⏰ Trend scan 1/3 — 10:00am ET');
+      await runTrendScanLogic();
+      return;
+    }
+    // Scan 2: 12:00pm ET
+    if (hour === 12 && min === 0 && !w.s2) {
+      w.s2 = true;
+      await trendLog('entry', '⏰ Trend scan 2/3 — 12:00pm ET');
+      await runTrendScanLogic();
+      return;
+    }
+    // Scan 3: 2:00pm ET
+    if (hour === 14 && min === 0 && !w.s3) {
+      w.s3 = true;
+      await trendLog('entry', '⏰ Trend scan 3/3 — 2:00pm ET');
+      await runTrendScanLogic();
+      return;
+    }
   } catch(e) { console.error('runTrendScan error:', e.message); }
 }
 
