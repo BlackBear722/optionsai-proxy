@@ -2414,7 +2414,7 @@ h1{font-size:22px;font-weight:500;color:#fff;margin-bottom:4px}
 .card-full{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}
 .ch{font-size:13px;font-weight:500;color:#fff;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
 .ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:10px}
-.tr{display:grid;grid-template-columns:70px 55px 45px 55px 55px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid #1f1f1f}
+.tr{display:grid;grid-template-columns:70px 55px 45px 55px 55px 50px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid #1f1f1f}
 .tr:last-child{border-bottom:none}.th{color:#555}
 .badge{padding:2px 7px;border-radius:999px;font-size:10px;font-weight:500}
 .bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}
@@ -2577,7 +2577,8 @@ stb.innerHTML=D.scalper.recent.length?D.scalper.recent.map(function(t){
   var pnl2=parseFloat(t.pnl)||0;
   var badge=t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
   var pstr=t.result==='open'?'<span style="color:#666">—</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(2)+'</span>';
-  return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+'</div>';
+  var closeBtn=t.result==='open'?'<button onclick="closeTrade('+t.id+')" style="background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A;border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer">Close</button>':'';
+  return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+closeBtn+'</div>';
 }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet today</div>';
 
 // ── Settings form ────────────────────────────────────────────────────────────
@@ -2633,6 +2634,18 @@ ttb.innerHTML=D.trend.openPositions.length?D.trend.openPositions.map(function(p)
 // ── Force trend scan ─────────────────────────────────────────────────────────
 function forceTrendScan(){
   fetch(BASE+'/trend/scan',{method:'POST'}).then(function(){alert('Trend scan triggered — refresh in 30 seconds to see results');});
+}
+
+function closeTrade(id){
+  if(!confirm('Mark this trade as closed with -$0.50 loss?')) return;
+  fetch(BASE+'/api/trades/'+id+'/close',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pnl:-0.50})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){ alert('Trade closed successfully'); location.reload(); }
+    else { alert('Error: ' + JSON.stringify(d)); }
+  });
 }
 <\/script></body></html>`);
   } catch(e) { res.status(500).send('Combined dashboard error: ' + e.message); }
