@@ -745,6 +745,11 @@ async function scanTicker(ticker, settings, marketTrend) {
     await addLog('skip', ticker + ' RSI ' + rsi + ' oversold (<30) — bounce risk, skipping Claude');
     return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI oversold', d: d };
   }
+  // RSI 48-52 = neutral zone — no reliable directional edge, Claude keeps accepting RSI=50
+  if (rsi >= 48 && rsi <= 52) {
+    await addLog('skip', ticker + ' RSI ' + rsi + ' in neutral zone (48-52) — no directional edge, skipping Claude');
+    return { ticker: ticker, signal: 'NONE', confidence: 'LOW', reason: 'RSI neutral', d: d };
+  }
 
   // 2. Wide spread — too expensive to trade profitably
   if (spread > 2.0) {
@@ -924,6 +929,30 @@ async function placeTrade(trade, session) {
   var strikeInt = Math.round(parseFloat(validStrike) * 1000);
   var strikeStr = ('00000000' + strikeInt).slice(-8);
   var symbol = t + exp.yy + exp.mm + exp.dd + trade.type[0].toUpperCase() + strikeStr;
+
+  // ── Check real option market price before placing ────────────────────────────
+  // Claude estimates premium from stock price but actual option cost can be much higher
+  // Block if real option price > $2.50 to prevent large stop losses
+  try {
+    var base3 = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+    var optQuoteR = await fetch(base3 + '/markets/quotes?symbols=' + symbol + '&greeks=false', {
+      headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+    });
+    var optQuoteData = await optQuoteR.json();
+    var optQ = optQuoteData && optQuoteData.quotes && optQuoteData.quotes.quote;
+    var realOptPrice = optQ ? (parseFloat(optQ.last) || ((parseFloat(optQ.bid) + parseFloat(optQ.ask)) / 2) || 0) : 0;
+    if (realOptPrice > 0) {
+      await addLog('entry', 'Real option price: $' + realOptPrice.toFixed(2) + ' (Claude estimated $' + trade.limitPrice + ')');
+      if (realOptPrice > 2.50) {
+        await addLog('stop', '🚫 Option price $' + realOptPrice.toFixed(2) + ' exceeds $2.50 cap — BLOCKING trade on ' + trade.ticker);
+        return { blocked: true, reason: 'option price $' + realOptPrice.toFixed(2) + ' > $2.50 cap' };
+      }
+    } else {
+      await addLog('entry', 'Could not fetch real option price — proceeding with Claude estimate $' + trade.limitPrice);
+    }
+  } catch(optPriceErr) {
+    await addLog('entry', 'Option price check error: ' + optPriceErr.message + ' — proceeding');
+  }
 
   var orderBody = {
     class: 'option',
@@ -1379,6 +1408,11 @@ async function runEngine() {
     var trade = { action: 'BUY', type: best.signal.indexOf('CALL') >= 0 ? 'CALL' : 'PUT', ticker: best.ticker, strike: parseFloat(best.d && best.d.price ? best.d.price : best.strike), contracts: tradeContracts, limitPrice: best.premium };
     try {
       var orderResult = await placeTrade(trade, session);
+      // Check if trade was blocked by price cap
+      if (orderResult && orderResult.blocked) {
+        await addLog('stop', '🚫 Trade blocked: ' + orderResult.reason);
+        return;
+      }
       var orderId = orderResult && orderResult.order && orderResult.order.id;
       var orderStatus = orderResult && orderResult.order && orderResult.order.status;
       var rejectReason = orderResult && orderResult.order && orderResult.order.reason_description;
@@ -2066,7 +2100,26 @@ async function buildTrendWatchlist() {
   var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   var todayStr = etNow.toLocaleDateString('en-CA');
   if (trendWatchCache.date === todayStr && trendWatchCache.tickers.length > 0) return trendWatchCache.tickers;
-  var anchors = ['NVDA', 'TSLA', 'META', 'MSFT'];
+
+  // Broad universe of trending-friendly stocks across sectors
+  var anchors = [
+    // Mega-cap tech
+    'NVDA', 'TSLA', 'META', 'MSFT', 'AAPL', 'AMD', 'GOOGL', 'AMZN',
+    // High-momentum
+    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI',
+    // Finance
+    'JPM', 'GS', 'BAC',
+    // Healthcare
+    'LLY', 'UNH',
+    // Energy
+    'XOM', 'CVX',
+    // Semis
+    'TSM', 'AVGO', 'QCOM',
+    // Consumer
+    'NFLX', 'SHOP'
+  ];
+
+  // Also add dynamic daily movers as bonus candidates
   var extras = [];
   try {
     var r = await fetch('https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=30', {
@@ -2082,12 +2135,13 @@ async function buildTrendWatchlist() {
       if (price < 20 || price > 1500) return;
       var chg = parseFloat(q.regularMarketChangePercent) || 0;
       var volR = q.averageDailyVolume3Month > 0 ? q.regularMarketVolume / q.averageDailyVolume3Month : 0;
-      if (Math.abs(chg) >= 2 && volR >= 1.5) extras.push(sym);
+      if (Math.abs(chg) >= 3 && volR >= 2.0) extras.push(sym);
     });
   } catch(e) {}
-  var final = anchors.concat(extras.slice(0, 4));
+
+  var final = anchors.concat(extras.slice(0, 5));
   trendWatchCache = { date: todayStr, tickers: final };
-  await trendLog('entry', 'Trend watchlist: ' + final.join(', '));
+  await trendLog('entry', '📋 Trend watchlist (' + final.length + ' tickers): ' + final.join(', '));
   return final;
 }
 
