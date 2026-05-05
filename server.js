@@ -2041,7 +2041,7 @@ async function trendLog(type, message) {
   try { await pool.query('INSERT INTO trend_logs (type,message) VALUES ($1,$2)', [type, message]); } catch(e) {}
 }
 
-var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts.\n\nTREND RULES:\n- UPTREND: Price above 20MA AND 50MA. 20MA above 50MA. Week change positive.\n- DOWNTREND: Price below 20MA AND 50MA. 20MA below 50MA. Week change negative.\n- FLAT: Do NOT trade.\n\nENTRY:\n- BUY_CALL: Uptrend, RSI 45-65, pullback to 20MA or breakout, SPY trending up.\n- BUY_PUT: Downtrend, RSI 35-55, bounce to 20MA rejected, SPY down/neutral.\n- NEVER enter RSI above 70 (calls) or below 30 (puts).\n\nOPTION: 35 days expiry, ATM strike, premium $2-$5.\nProfit target $200/contract. Stop 40% of premium.\nHIGH = all conditions met. NONE = any doubt.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":200,"expiry":"2026-06-06","premium":3.50,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
+var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts to find multi-week momentum trades.\n\nTREND RULES:\n- UPTREND: Price above 20-day MA AND week change positive. Bonus if 20MA also above 50MA.\n- DOWNTREND: Price below 20-day MA AND week change negative. Bonus if 20MA below 50MA.\n- FLAT: Price chopping around 20MA with no clear weekly direction — do NOT trade.\n\nENTRY RULES:\n- BUY_CALL: Uptrend confirmed, RSI 40-75 (elevated RSI in uptrend = momentum, NOT overbought), price holding above 20MA or breaking out of consolidation, volume confirming.\n- BUY_PUT: Downtrend confirmed, RSI 25-60, price rejected at 20MA or breaking down from consolidation, volume confirming.\n- IDEAL entries: pullback to 20MA in uptrend (RSI 40-55), OR breakout continuation (RSI 55-70).\n- SPY direction is context only — strong individual stock trends can go against the market.\n- NEVER enter RSI above 80 (extreme overbought) or below 20 (extreme oversold).\n\nOPTION SELECTION:\n- Expiry: 30-40 days out (enough time for trend to play out).\n- Strike: ATM or 1 strike in the money.\n- Premium: $1.50-$5.00 per contract.\n\nPROFIT TARGET: $200 per contract. STOP LOSS: 40% of premium paid.\n\nHIGH confidence: trend clearly established, clean entry point (pullback or breakout), RSI confirms direction.\nNONE: trend unclear, RSI extreme, no clear entry trigger, or stock just had huge move without consolidation.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":200,"expiry":"2026-06-06","premium":3.50,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
 
 async function callTrendClaude(msg) {
   try {
@@ -2060,6 +2060,7 @@ async function callTrendClaude(msg) {
 
 async function fetchDailyCandles(ticker) {
   try {
+    // Fetch daily candles (3 months) for MA, RSI, trend
     var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=3mo', {
       headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
     });
@@ -2079,14 +2080,52 @@ async function fetchDailyCandles(ticker) {
     var rsi = tlosses === 0 ? 100 : Math.round(100 - (100 / (1 + (gains/14) / (tlosses/14))));
     var prevClose = closes[closes.length - 2] || price;
     var weekAgo = closes[closes.length - 6] || price;
+    var monthAgo = closes[closes.length - 21] || price;
     var trend = 'FLAT';
-    if (price > ma20 && price > ma50 && ma20 > ma50 && price > weekAgo) trend = 'UP';
-    else if (price < ma20 && price < ma50 && ma20 < ma50 && price < weekAgo) trend = 'DOWN';
+    if (price > ma20 && price > weekAgo) trend = 'UP';
+    else if (price < ma20 && price < weekAgo) trend = 'DOWN';
+
+    // Fetch weekly candles (6 months) for multi-week trend confirmation
+    var weeklyTrend = 'UNKNOWN';
+    var weeklyRsi = 50;
+    var weeklyMa10 = 0;
+    try {
+      var rw = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1wk&range=6mo', {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+      });
+      var wdata = await rw.json();
+      var wres = wdata && wdata.chart && wdata.chart.result && wdata.chart.result[0];
+      var wq = wres && wres.indicators && wres.indicators.quote && wres.indicators.quote[0];
+      if (wq && wq.close) {
+        var wcloses = wq.close.filter(function(v) { return v != null && !isNaN(v); });
+        if (wcloses.length >= 10) {
+          // 10-week MA (roughly 50-day equivalent on weekly)
+          weeklyMa10 = wcloses.slice(-10).reduce(function(s, v) { return s + v; }, 0) / 10;
+          var wPrice = wcloses[wcloses.length - 1];
+          var w4ago = wcloses[wcloses.length - 5] || wPrice; // 4 weeks ago
+          // Weekly RSI
+          var wgains = 0, wlosses2 = 0;
+          for (var wi = wcloses.length - 14; wi < wcloses.length; wi++) {
+            if (wi < 1) continue;
+            var wd = wcloses[wi] - wcloses[wi-1];
+            if (wd > 0) wgains += wd; else wlosses2 += Math.abs(wd);
+          }
+          weeklyRsi = wlosses2 === 0 ? 100 : Math.round(100 - (100 / (1 + (wgains/14) / (wlosses2/14))));
+          // Weekly trend: price above 10-week MA and above where it was 4 weeks ago
+          if (wPrice > weeklyMa10 && wPrice > w4ago) weeklyTrend = 'UP';
+          else if (wPrice < weeklyMa10 && wPrice < w4ago) weeklyTrend = 'DOWN';
+          else weeklyTrend = 'FLAT';
+        }
+      }
+    } catch(we) { console.error('weekly candles ' + ticker + ':', we.message); }
+
     return {
       ticker: ticker, price: price.toFixed(2), ma20: ma20.toFixed(2), ma50: ma50.toFixed(2),
       rsi: rsi, trend: trend,
+      weeklyTrend: weeklyTrend, weeklyRsi: weeklyRsi, weeklyMa10: weeklyMa10.toFixed(2),
       chgPct: ((price - prevClose) / prevClose * 100).toFixed(2),
       weekChgPct: ((price - weekAgo) / weekAgo * 100).toFixed(2),
+      monthChgPct: ((price - monthAgo) / monthAgo * 100).toFixed(2),
       distFromMa20Pct: ((price - ma20) / ma20 * 100).toFixed(2),
       nearMa20: Math.abs((price - ma20) / ma20 * 100) < 2
     };
@@ -2227,12 +2266,27 @@ async function runTrendScanLogic() {
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
     if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat — no clear MA direction'); continue; }
-    if (d2.rsi > 75 || d2.rsi < 25) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme'); continue; }
-    if (spyTrend2 !== 'UNKNOWN' && spyTrend2 !== 'FLAT' && d2.trend !== spyTrend2) { await trendLog('skip', ticker + ' trend conflicts SPY'); continue; }
-    var msg = 'Ticker: ' + ticker + '\nPrice: $' + d2.price + '\n20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 +
-      '\nRSI: ' + d2.rsi + ' | Trend: ' + d2.trend + ' | Near 20MA: ' + d2.nearMa20 +
-      '\nWeek chg: ' + d2.weekChgPct + '% | SPY trend: ' + spyTrend2 +
-      '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium\nRespond with TREND_RESULT.';
+    // Wider RSI range for trend following — elevated RSI in uptrend = momentum, not overbought
+    if (d2.rsi > 80 || d2.rsi < 20) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme for trend'); continue; }
+    // SPY alignment is informational only — don't block trades that conflict with SPY
+    // Best trend trades often happen in stocks moving independently of the market
+    if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' no clear trend direction'); continue; }
+    // Weekly trend confirmation — skip if weekly contradicts daily
+    if (d2.weeklyTrend !== 'UNKNOWN' && d2.weeklyTrend !== 'FLAT' && d2.weeklyTrend !== d2.trend) {
+      await trendLog('skip', ticker + ' daily:' + d2.trend + ' conflicts weekly:' + d2.weeklyTrend + ' — skipping');
+      continue;
+    }
+
+    await trendLog('entry', ticker + ' $' + d2.price + ' daily:' + d2.trend + ' RSI:' + d2.rsi + ' weekly:' + d2.weeklyTrend + ' wRSI:' + d2.weeklyRsi + ' week%:' + d2.weekChgPct);
+
+    var msg = 'Ticker: ' + ticker +
+      '\nPrice: $' + d2.price +
+      '\nDAILY — 20MA: $' + d2.ma20 + ' | 50MA: $' + d2.ma50 + ' | RSI: ' + d2.rsi + ' | Trend: ' + d2.trend +
+      '\nWEEKLY — 10-week MA: $' + d2.weeklyMa10 + ' | RSI: ' + d2.weeklyRsi + ' | Trend: ' + d2.weeklyTrend +
+      '\nNear 20MA: ' + d2.nearMa20 + ' | Week chg: ' + d2.weekChgPct + '% | Month chg: ' + (d2.monthChgPct||'N/A') + '%' +
+      '\nSPY daily trend: ' + spyTrend2 +
+      '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium' +
+      '\n\nUse weekly trend for conviction, daily for entry timing. Respond with TREND_RESULT.';
     var result2 = await callTrendClaude(msg);
     if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
     await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
