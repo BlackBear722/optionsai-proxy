@@ -2304,7 +2304,7 @@ app.get('/trend/dashboard', async function(req, res) {
     var data3 = { positions: positions.rows, stats: s2, winRate: wr2, logs: logs2.rows };
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Trend Bot</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}.mv{font-size:22px;font-weight:500}.pos{color:#1D9E75}.neg{color:#E24B4A}.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:12px}.tr{display:grid;grid-template-columns:80px 60px 50px 60px 70px 1fr;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid #2a2a2a}.th{font-size:11px;color:#666}.badge{padding:2px 8px;border-radius:999px;font-size:11px}.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}.log{font-size:11px;color:#888;padding:4px 0;border-bottom:1px solid #1a1a1a}.rb{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;cursor:pointer}</style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-  <div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Monitors every 30min | Scans daily at 10am ET</p></div>
+  <div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Scans at 10am, 12pm & 2pm ET</p></div>
   <div style="display:flex;gap:8px">
     <a href="/combined" style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;text-decoration:none">Combined View</a>
     <button class="rb" onclick="location.reload()">Refresh</button>
@@ -2313,7 +2313,7 @@ app.get('/trend/dashboard', async function(req, res) {
 <div class="g4"><div class="metric"><div class="ml">Total P&L</div><div class="mv" id="spnl">-</div></div><div class="metric"><div class="ml">Win Rate</div><div class="mv" id="swr">-</div></div><div class="metric"><div class="ml">Open</div><div class="mv" id="sop">-</div></div><div class="metric"><div class="ml">W / L</div><div class="mv" id="swl">-</div></div></div>
 <div class="card"><div class="ct">Positions</div><div class="tr th"><span>Date</span><span>Ticker</span><span>Dir</span><span>Status</span><span>P&L</span><span>Reason</span></div><div id="tb"></div></div>
 <div class="card"><div class="ct">Recent Logs</div><div id="lb"></div></div>
-<p style="font-size:12px;color:#666;margin-top:8px">Next auto-scan: tomorrow at 10:00am ET | <a href="#" style="color:#1D9E75" onclick="fetch('/trend/scan',{method:'POST'}).then(function(){alert('Scan triggered — refresh in 30 seconds');});return false">Force scan now</a></p>
+<p style="font-size:12px;color:#666;margin-top:8px">Auto-scans at 10am, 12pm &amp; 2pm ET daily | <a href="#" style="color:#1D9E75" onclick="fetch('/trend/scan',{method:'POST'}).then(function(){alert('Scan triggered — refresh in 30 seconds');});return false">Force scan now</a></p>
 <script>
 var D=` + JSON.stringify(data3) + `;
 var s=D.stats,pnl=parseFloat(s.total_pnl)||0;
@@ -2628,7 +2628,7 @@ var ttb=document.getElementById('ttb');
 ttb.innerHTML=D.trend.openPositions.length?D.trend.openPositions.map(function(p){
   var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
   return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span><span class="badge bo">Open</span><span style="color:#666;font-size:11px">'+(p.reason||'').slice(0,20)+'</span></div>';
-}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — next scan at 10am ET</div>';
+}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm & 2pm ET</div>';
 
 // ── Force trend scan ─────────────────────────────────────────────────────────
 function forceTrendScan(){
