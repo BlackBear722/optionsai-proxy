@@ -2382,10 +2382,17 @@ app.get('/combined', async function(req, res) {
       for (var tci = tlTrades.length-1; tci >= 0; tci--) { if (tlTrades[tci].result === 'loss') todayConsecLosses++; else break; }
     } catch(e) {}
 
+    // Count today's trades
+    var todayTradeCount = 0;
+    try {
+      var ttRows = await pool.query("SELECT COUNT(*) FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE");
+      todayTradeCount = parseInt(ttRows.rows[0].count) || 0;
+    } catch(e) {}
+
     var combined = {
       scalper: { pnl: scalperPnl.toFixed(2), wr: scalperWr, wins: scalperWins.length, losses: scalperLosses.length, recent: recentScalper, trades: closed.length },
       trend: { pnl: trendPnl.toFixed(2), wr: trendWr, wins: trendWins.length, losses: trendClosed.length, openPositions: trendOpenPos, trades: trendClosed.length },
-      engine: { on: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss, killSwitch: killSwitch, todayLossCount: todayLossCount, todayConsecLosses: todayConsecLosses },
+      engine: { on: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss, killSwitch: killSwitch, todayLossCount: todayLossCount, todayConsecLosses: todayConsecLosses, todayTradeCount: todayTradeCount },
       settings: settings,
       hasSession: !!session,
       totalPnl: (scalperPnl + trendPnl).toFixed(2)
@@ -2554,9 +2561,9 @@ function toggleEngine(on){
 
 // ── Status pills ─────────────────────────────────────────────────────────────
 var s=D.settings;
-document.getElementById('strades').textContent=D.engine.todayLossCount!==undefined?(D.scalper.trades%100)+'/'+s.maxDailyTrades+' trades':'';
-document.getElementById('slosses').textContent=D.engine.todayLossCount+'/'+s.maxDailyLosses+' losses';
-document.getElementById('sconsec').textContent=D.engine.todayConsecLosses+' consec';
+document.getElementById('strades').textContent=(D.engine.todayTradeCount||0)+'/'+(s.maxDailyTrades||5)+' trades today';
+document.getElementById('slosses').textContent=(D.engine.todayLossCount||0)+'/'+(s.maxDailyLosses||3)+' losses';
+document.getElementById('sconsec').textContent=(D.engine.todayConsecLosses||0)+' consec';
 
 // ── Scalper stats ────────────────────────────────────────────────────────────
 var sp=parseFloat(D.scalper.pnl)||0;
@@ -2574,14 +2581,21 @@ stb.innerHTML=D.scalper.recent.length?D.scalper.recent.map(function(t){
 }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet today</div>';
 
 // ── Settings form ────────────────────────────────────────────────────────────
-document.getElementById('profitTarget').value=s.profitTarget||0.6;
-document.getElementById('stopLoss').value=s.stopLoss||0.45;
-document.getElementById('trailActivate').value=s.trailActivate||0.25;
-document.getElementById('trailAmount').value=s.trailAmount||0.15;
-document.getElementById('maxHoldMinutes').value=s.maxHoldMinutes||15;
-document.getElementById('contracts').value=s.contracts||1;
-document.getElementById('maxDailyTrades').value=s.maxDailyTrades||5;
-document.getElementById('maxDailyLosses').value=s.maxDailyLosses||3;
+// Populate settings with current values
+var fields = {
+  profitTarget: s.profitTarget || 0.6,
+  stopLoss: s.stopLoss || 0.45,
+  trailActivate: s.trailActivate || 0.25,
+  trailAmount: s.trailAmount || 0.15,
+  maxHoldMinutes: s.maxHoldMinutes || 15,
+  contracts: s.contracts || 1,
+  maxDailyTrades: s.maxDailyTrades || 5,
+  maxDailyLosses: s.maxDailyLosses || 3
+};
+Object.keys(fields).forEach(function(k) {
+  var el = document.getElementById(k);
+  if (el) el.value = fields[k];
+});
 
 function saveSettings(){
   var newS={
