@@ -1784,6 +1784,21 @@ app.post('/api/trades/:id/close', async function(req, res) {
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
 
+// Close a trend position manually — capitalize on current profit
+app.post('/api/trend-positions/:id/close', async function(req, res) {
+  try {
+    var id = parseInt(req.params.id);
+    var pnl = parseFloat(req.body.pnl) || 0;
+    var result = pnl >= 0 ? 'win' : 'loss';
+    await pool.query(
+      "UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3",
+      [result, pnl.toFixed(2), id]
+    );
+    await trendLog('trade', 'MANUAL CLOSE: position #' + id + ' closed with ' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(0) + ' (' + result + ')');
+    res.json({ ok: true, result: result, pnl: pnl });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Combined logs endpoint for auto-refresh
 app.get('/api/combined-logs', async function(req, res) {
   try {
@@ -2883,8 +2898,23 @@ function closeTrade(id){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({pnl:-0.50})
   }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){ alert('Trade closed successfully'); location.reload(); }
+    if(d.ok){ alert('Trade closed successfully'); refreshDashboard(); }
     else { alert('Error: ' + JSON.stringify(d)); }
+  });
+}
+
+function closeTrendPosition(id, currentPnl) {
+  var pnlStr = currentPnl >= 0 ? '+$' + currentPnl : '-$' + Math.abs(currentPnl);
+  if(!confirm('Close this trend position now for ' + pnlStr + '?\n\nThis will record it as a ' + (currentPnl >= 0 ? 'WIN' : 'LOSS') + ' in your journal.')) return;
+  fetch(BASE+'/api/trend-positions/'+id+'/close',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pnl: currentPnl})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){
+      alert('Position closed! ' + pnlStr + ' recorded as ' + d.result.toUpperCase());
+      refreshDashboard();
+    } else { alert('Error: ' + JSON.stringify(d)); }
   });
 }
 
@@ -3001,10 +3031,10 @@ function refreshDashboard() {
         '<div style="background:#222;border-radius:4px;height:6px;overflow:hidden">' +
           '<div style="background:'+progressColor+';height:100%;width:'+progress.toFixed(0)+'%;transition:width 0.5s;border-radius:4px"></div>' +
         '</div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;margin-top:6px">' +
           '<span>Stop $'+stopP.toFixed(2)+'</span>' +
           '<span>Stock: $'+(p.currentStockPrice||'—')+'</span>' +
-          '<span>$200 target</span>' +
+          '<button onclick="closeTrendPosition('+p.id+','+pnlNow+')" style="background:'+(pnlNow>0?'#0a2e1f':'#2e0a0a')+';border:1px solid '+(pnlNow>0?'#1D9E75':'#E24B4A')+';color:'+(pnlNow>0?'#1D9E75':'#E24B4A')+';border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;font-weight:500">Close '+(pnlNow>=0?'+':'')+'$'+pnlNow+'</button>' +
         '</div>' +
       '</div>';
     }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm, 2pm & 3:30pm ET</div>';
