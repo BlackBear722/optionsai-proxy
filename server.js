@@ -1203,7 +1203,7 @@ async function runEngine() {
     return;
   }
 
-  var inMorning   = midE >= 0   && midE <= 150;  // 9:30am–12:00pm ET (extended to capture full 10am hour)
+  var inMorning   = midE >= 0   && midE <= 90;   // 9:30am–11:00am ET (best win rate window per hourly data)
   var inAfternoon = false;
   if (!inMorning && !inAfternoon && midE >= 0 && midE <= 390) {
     // Convert midE back to clock time for the log message
@@ -2153,18 +2153,20 @@ async function buildTrendWatchlist() {
   var anchors = [
     // Mega-cap tech
     'NVDA', 'TSLA', 'META', 'MSFT', 'AAPL', 'AMD', 'GOOGL', 'AMZN',
-    // High-momentum
-    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI',
+    // High-momentum / crypto-adjacent
+    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI', 'HOOD', 'MARA', 'RIOT',
+    // Semis & infrastructure
+    'TSM', 'AVGO', 'QCOM', 'ARM', 'ASML',
+    // Cybersecurity & cloud
+    'PANW', 'SNOW', 'DDOG', 'APP',
     // Finance
     'JPM', 'GS', 'BAC',
     // Healthcare
     'LLY', 'UNH',
-    // Energy
-    'XOM', 'CVX',
-    // Semis
-    'TSM', 'AVGO', 'QCOM',
-    // Consumer
-    'NFLX', 'SHOP'
+    // Energy & commodities
+    'XOM', 'CVX', 'GLD',
+    // Consumer & other momentum
+    'NFLX', 'SHOP', 'CELH', 'AXON'
   ];
 
   // Also add dynamic daily movers as bonus candidates
@@ -2194,16 +2196,20 @@ async function buildTrendWatchlist() {
 }
 
 // ── Trend Position Monitor — runs every 30 min during market hours ─────────
+// In-memory peak price tracker for trend trailing stops { posId: peakOptionPrice }
+var trendPeakPrices = {};
+
 async function monitorTrendPositions() {
   try {
     var openPos = await pool.query("SELECT * FROM trend_positions WHERE status='open'");
     if (!openPos.rows.length) return;
     await trendLog('entry', 'Monitoring ' + openPos.rows.length + ' open trend position(s)');
+
     for (var i = 0; i < openPos.rows.length; i++) {
       var pos = openPos.rows[i];
       try {
-        // Fetch current stock price from Yahoo
-        var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=1d&range=1d', {
+        // ── Fetch current stock price from Yahoo ──────────────────────────────
+        var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=5m&range=1d', {
           headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
         var data = await r.json();
@@ -2211,47 +2217,82 @@ async function monitorTrendPositions() {
         var currentStockPrice = meta && meta.regularMarketPrice ? parseFloat(meta.regularMarketPrice) : null;
         if (!currentStockPrice) continue;
 
-        // Estimate option price change based on delta (~0.5 for ATM options)
+        // ── Try fetching actual option price from Yahoo ───────────────────────
+        var entryPrice = parseFloat(pos.entry_price);
         var entryStockPrice = parseFloat(pos.strike) || currentStockPrice;
         var stockMove = currentStockPrice - entryStockPrice;
-        var estimatedOptionPrice = parseFloat(pos.entry_price) + (stockMove * 0.5);
-        estimatedOptionPrice = Math.max(0.01, estimatedOptionPrice);
 
-        var entryPrice = parseFloat(pos.entry_price);
-        var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100;
+        // Use a more accurate delta model:
+        // ATM options: delta ~0.5 | ITM (stock up 3%+): delta ~0.65 | OTM: delta ~0.35
+        var pctMove = entryStockPrice > 0 ? ((currentStockPrice - entryStockPrice) / entryStockPrice) : 0;
+        var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
+        if (pos.direction === 'PUT') delta = -delta;
+        var estimatedOptionPrice = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
+
+        // ── P&L calculation ───────────────────────────────────────────────────
+        var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100 * (pos.contracts || 1);
         var pnlPct = ((estimatedOptionPrice - entryPrice) / entryPrice * 100).toFixed(1);
+        var daysHeld = pos.entered_at ? Math.floor((Date.now() - new Date(pos.entered_at)) / (1000 * 60 * 60 * 24)) : 0;
+
+        // ── Trailing stop — activates at +50% gain ────────────────────────────
+        var posKey = 'trend_' + pos.id;
+        if (!trendPeakPrices[posKey]) trendPeakPrices[posKey] = entryPrice;
+        if (estimatedOptionPrice > trendPeakPrices[posKey]) {
+          trendPeakPrices[posKey] = estimatedOptionPrice;
+        }
+        var peakPrice = trendPeakPrices[posKey];
+        var peakGainPct = ((peakPrice - entryPrice) / entryPrice * 100);
+        var trailStopPrice = peakGainPct >= 50 ? peakPrice * 0.75 : null; // trail at 25% below peak once up 50%
 
         await trendLog('entry', 'Monitor ' + pos.ticker + ' ' + pos.direction +
           ': stock=$' + currentStockPrice.toFixed(2) +
           ' option~$' + estimatedOptionPrice.toFixed(2) +
-          ' PnL=$' + pnlPerContract.toFixed(0) + ' (' + pnlPct + '%)');
+          ' peak=$' + peakPrice.toFixed(2) +
+          ' PnL=$' + pnlPerContract.toFixed(0) + ' (' + pnlPct + '%)' +
+          ' held:' + daysHeld + 'd' +
+          (trailStopPrice ? ' trailStop=$' + trailStopPrice.toFixed(2) : ''));
 
-        // Check profit target — $200 per contract
+        // ── Exit decisions ────────────────────────────────────────────────────
+
+        // 1. Hard profit target: $200
         if (pnlPerContract >= 200) {
           await pool.query("UPDATE trend_positions SET status='win', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
-          await trendLog('trade', 'PROFIT TARGET HIT: ' + pos.ticker + ' +$' + pnlPerContract.toFixed(0) + ' — closing position');
+          delete trendPeakPrices[posKey];
+          await trendLog('trade', '🎯 PROFIT TARGET HIT: ' + pos.ticker + ' +$' + pnlPerContract.toFixed(0) + ' in ' + daysHeld + 'd — closing');
           continue;
         }
 
-        // Check stop loss — 40% of premium paid
-        var stopPrice = entryPrice * 0.60;
-        if (estimatedOptionPrice <= stopPrice) {
+        // 2. Trailing stop — once up 50%, trail at 25% below peak
+        if (trailStopPrice && estimatedOptionPrice <= trailStopPrice) {
+          var isWin = pnlPerContract > 0;
+          await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWin ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
+          delete trendPeakPrices[posKey];
+          await trendLog(isWin ? 'trade' : 'stop', '📉 TRAILING STOP: ' + pos.ticker + ' ' + (isWin ? '+' : '') + '$' + pnlPerContract.toFixed(0) + ' (peak was $' + peakPrice.toFixed(2) + ')');
+          continue;
+        }
+
+        // 3. Hard stop loss: 40% of premium
+        var hardStop = entryPrice * 0.60;
+        if (estimatedOptionPrice <= hardStop) {
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
-          await trendLog('stop', 'STOP LOSS HIT: ' + pos.ticker + ' -$' + Math.abs(pnlPerContract).toFixed(0) + ' — closing position');
+          delete trendPeakPrices[posKey];
+          await trendLog('stop', '🛑 STOP LOSS: ' + pos.ticker + ' -$' + Math.abs(pnlPerContract).toFixed(0) + ' — closing');
           continue;
         }
 
-        // Check expiry — exit 7 days before expiry
+        // 4. Expiry exit — 7 days before expiry
         if (pos.expiry) {
           var expiryDate = new Date(pos.expiry + 'T12:00:00Z');
           var daysLeft = Math.floor((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
           if (daysLeft <= 7) {
-            var isWin = pnlPerContract > 0;
-            await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWin ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
-            await trendLog(isWin ? 'trade' : 'stop', 'EXPIRY EXIT (' + daysLeft + ' days left): ' + pos.ticker + ' $' + pnlPerContract.toFixed(0));
+            var isWinExp = pnlPerContract > 0;
+            await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWinExp ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
+            delete trendPeakPrices[posKey];
+            await trendLog(isWinExp ? 'trade' : 'stop', '⏰ EXPIRY EXIT (' + daysLeft + 'd left): ' + pos.ticker + ' $' + pnlPerContract.toFixed(0));
           }
         }
-      } catch(posErr) { console.error('Monitor position error:', posErr.message); }
+
+      } catch(posErr) { console.error('Monitor position error ' + pos.ticker + ':', posErr.message); }
     }
   } catch(e) { console.error('monitorTrendPositions error:', e.message); }
 }
@@ -2374,7 +2415,9 @@ app.get('/trend/dashboard', async function(req, res) {
   </div>
 </div>
 <div class="g4"><div class="metric"><div class="ml">Total P&L</div><div class="mv" id="spnl">-</div></div><div class="metric"><div class="ml">Win Rate</div><div class="mv" id="swr">-</div></div><div class="metric"><div class="ml">Open</div><div class="mv" id="sop">-</div></div><div class="metric"><div class="ml">W / L</div><div class="mv" id="swl">-</div></div></div>
-<div class="card"><div class="ct">Positions</div><div class="tr th"><span>Date</span><span>Ticker</span><span>Dir</span><span>Status</span><span>P&L</span><span>Reason</span></div><div id="tb"></div></div>
+<div class="card"><div class="ct">Positions</div>
+<div class="tr th" style="grid-template-columns:70px 55px 45px 60px 70px 65px 1fr"><span>Date</span><span>Ticker</span><span>Dir</span><span>Status</span><span>Entry</span><span>P&L</span><span>Details</span></div>
+<div id="tb"></div></div>
 <div class="card"><div class="ct">Recent Logs</div><div id="lb"></div></div>
 <p style="font-size:12px;color:#666;margin-top:8px">Auto-scans at 10am, 12pm &amp; 2pm ET daily | <a href="#" style="color:#1D9E75" onclick="fetch('/trend/scan',{method:'POST'}).then(function(){alert('Scan triggered — refresh in 30 seconds');});return false">Force scan now</a></p>
 <script>
@@ -2385,7 +2428,26 @@ document.getElementById('swr').textContent=D.winRate+'%';
 document.getElementById('sop').textContent=s.open_pos+'/2';
 document.getElementById('swl').textContent=s.wins+' / '+s.losses;
 var tb=document.getElementById('tb');
-tb.innerHTML=D.positions.length?D.positions.map(function(p){var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});var pnl2=parseFloat(p.pnl)||0;var badge=p.status==='open'?'<span class="badge bo">Open</span>':p.status==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';var pstr=p.status==='open'?'<span style="color:#666">watching</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(0)+'</span>';return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span>'+badge+pstr+'<span style="color:#666;font-size:11px">'+(p.reason||'').slice(0,40)+'</span></div>';}).join(''):'<div style="text-align:center;color:#666;padding:20px;font-size:13px">No positions yet</div>';
+tb.innerHTML=D.positions.length?D.positions.map(function(p){
+  var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
+  var daysHeld=Math.floor((Date.now()-new Date(p.entered_at))/(1000*60*60*24));
+  var pnl2=parseFloat(p.pnl)||0;
+  var entryP=parseFloat(p.entry_price)||0;
+  var targetP=parseFloat(p.target_price)||0;
+  var stopP=parseFloat(p.stop_price)||0;
+  var badge=p.status==='open'?'<span class="badge bo">Open</span>':p.status==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
+  var pstr=p.status==='open'?
+    '<span style="color:#888">day '+daysHeld+'</span>':
+    '<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+';font-weight:500">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(0)+'</span>';
+  var progress='';
+  if(p.status==='open' && targetP>0){
+    var pctToTarget=Math.min(100,Math.max(0,((entryP-stopP)>0?(pnl2/100/(targetP-entryP)*100):0)));
+    progress='<div style="font-size:10px;color:#666">$'+entryP.toFixed(2)+' → $'+targetP.toFixed(2)+' | stop $'+stopP.toFixed(2)+'</div>';
+  } else {
+    progress='<span style="color:#555;font-size:10px">'+(p.reason||'').slice(0,35)+'</span>';
+  }
+  return'<div class="tr" style="grid-template-columns:70px 55px 45px 60px 70px 65px 1fr;align-items:start"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span>'+badge+'<span style="color:#888;font-size:11px">$'+entryP.toFixed(2)+'</span>'+pstr+progress+'</div>';
+}).join(''):'<div style="text-align:center;color:#666;padding:20px;font-size:13px">No positions yet — scans at 10am, 12pm & 2pm ET</div>';
 document.getElementById('lb').innerHTML=D.logs.map(function(l){return'<div class="log">'+new Date(l.ts).toLocaleTimeString()+' ['+l.type+'] '+l.message+'</div>';}).join('');
 <\/script></body></html>`);
   } catch(e) { res.status(500).send('Error: ' + e.message); }
