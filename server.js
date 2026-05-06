@@ -2843,7 +2843,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 </div>
 
 <script>
-var D=` + JSON.stringify(combined) + `;
+var D=JSON.parse(` + JSON.stringify(JSON.stringify(combined)) + `);
 var BASE='';
 
 // ── View switching ────────────────────────────────────────────────────────────
