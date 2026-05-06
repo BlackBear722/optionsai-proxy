@@ -2749,7 +2749,8 @@ pool.connect()
         var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
         var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
         var h = etNow.getHours();
-        if (isWd && h >= 9 && h < 16) monitorTrendPositions().catch(console.error);
+        var minOfDay2 = etNow.getHours() * 60 + etNow.getMinutes();
+        if (isWd && minOfDay2 >= 570 && minOfDay2 < 960) monitorTrendPositions().catch(console.error);
       }, 30 * 60 * 1000);
 
       // Gap protection — runs at 9:05am ET every weekday
@@ -2758,12 +2759,12 @@ pool.connect()
         var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
         var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
         var h = etNow.getHours(), m = etNow.getMinutes();
-        if (isWd && h === 9 && m >= 5 && m <= 7) {
+        if (isWd && h === 9 && m >= 35 && m <= 37) {
           gapProtectionCheck().catch(console.error);
         }
       }, 60 * 1000);
 
-      console.log('Trend bot initialized — scans 4x daily, monitors every 30min, gap check at 9:05am');
+      console.log('Trend bot initialized — scans 4x daily, monitors every 30min, gap check at 9:35am ET');
     }).catch(function(e) { console.error('Trend init error:', e.message); });
 
     // ── Smart startup: auto-restart engine if market is open and engine was running ──
