@@ -2626,8 +2626,6 @@ app.get('/combined', async function(req, res) {
       settings: settings,
       hasSession: !!session,
       totalPnl: (scalperPnl + trendPnl).toFixed(2),
-      scalperLogs: scalperLogs,
-      trendLogs: trendLogs
     };
 
     res.send(`<!DOCTYPE html>
@@ -2843,7 +2841,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 </div>
 
 <script>
-var D=JSON.parse(` + JSON.stringify(JSON.stringify(combined)) + `);
+var D=null;
 var BASE='';
 
 // ── View switching ────────────────────────────────────────────────────────────
@@ -2938,10 +2936,10 @@ function updateEngine(on) {
   if(tog) tog.checked=on;
   if(el) el.textContent=on?'Running':'Off';
 }
-updateEngine(D.engine.on);
+updateEngine(false);
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-var s=D.settings;
+var s={};
 var fieldDefaults={profitTarget:0.6,stopLoss:0.45,trailActivate:0.25,trailAmount:0.15,maxHoldMinutes:15,contracts:1,maxDailyTrades:5,maxDailyLosses:3};
 Object.keys(fieldDefaults).forEach(function(k){var el=document.getElementById(k);if(el)el.value=s[k]||fieldDefaults[k];});
 
@@ -3093,19 +3091,16 @@ function initialRender(d, logs) {
     if(logs.scalperLogs) renderLog(logs.scalperLogs,'scalper-log');
     if(logs.trendLogs) renderLog(logs.trendLogs,'trend-log');
   } else {
-    renderLog(D.scalperLogs,'scalper-log');
-    renderLog(D.trendLogs,'trend-log');
+    
+    
   }
 
   setEl('lu', 'Updated '+new Date().toLocaleTimeString());
 }
 
-// Render immediately with server-side data
-initialRender(D, null);
-
-// Then keep refreshing from API
+// Fetch data immediately on load then refresh every 30s
+refreshDashboard();
 setInterval(refreshDashboard, 30000);
-setTimeout(refreshDashboard, 1000);
 <\/script>
 </body>
 </html>`);
