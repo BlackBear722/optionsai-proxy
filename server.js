@@ -2408,27 +2408,34 @@ async function runTrendScan() {
     if (!isWd || hour < 9 || hour >= 16) return;
 
     var todayStr = etNow.toLocaleDateString('en-CA');
-    if (!trendScanWindows[todayStr]) trendScanWindows[todayStr] = { s1: false, s2: false, s3: false };
+    if (!trendScanWindows[todayStr]) trendScanWindows[todayStr] = { s1: false, s2: false, s3: false, s4: false };
     var w = trendScanWindows[todayStr];
 
     // Scan 1: 10:00am ET
     if (hour === 10 && min === 0 && !w.s1) {
       w.s1 = true;
-      await trendLog('entry', '⏰ Trend scan 1/3 — 10:00am ET');
+      await trendLog('entry', '⏰ Trend scan 1/4 — 10:00am ET');
       await runTrendScanLogic();
       return;
     }
     // Scan 2: 12:00pm ET
     if (hour === 12 && min === 0 && !w.s2) {
       w.s2 = true;
-      await trendLog('entry', '⏰ Trend scan 2/3 — 12:00pm ET');
+      await trendLog('entry', '⏰ Trend scan 2/4 — 12:00pm ET');
       await runTrendScanLogic();
       return;
     }
     // Scan 3: 2:00pm ET
     if (hour === 14 && min === 0 && !w.s3) {
       w.s3 = true;
-      await trendLog('entry', '⏰ Trend scan 3/3 — 2:00pm ET');
+      await trendLog('entry', '⏰ Trend scan 3/4 — 2:00pm ET');
+      await runTrendScanLogic();
+      return;
+    }
+    // Scan 4: 3:30pm ET — last window before close
+    if (hour === 15 && min === 30 && !w.s4) {
+      w.s4 = true;
+      await trendLog('entry', '⏰ Trend scan 4/4 — 3:30pm ET');
       await runTrendScanLogic();
       return;
     }
@@ -2448,7 +2455,7 @@ app.get('/trend/dashboard', async function(req, res) {
     var data3 = { positions: positions.rows, stats: s2, winRate: wr2, logs: logs2.rows };
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Trend Bot</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}.mv{font-size:22px;font-weight:500}.pos{color:#1D9E75}.neg{color:#E24B4A}.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:12px}.tr{display:grid;grid-template-columns:80px 60px 50px 60px 70px 1fr;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid #2a2a2a}.th{font-size:11px;color:#666}.badge{padding:2px 8px;border-radius:999px;font-size:11px}.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}.log{font-size:11px;color:#888;padding:4px 0;border-bottom:1px solid #1a1a1a}.rb{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;cursor:pointer}</style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-  <div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Scans at 10am, 12pm & 2pm ET</p></div>
+  <div><h1 style="font-size:20px;font-weight:500;color:#fff">Trend Following Bot</h1><p style="font-size:12px;color:#666;margin-top:4px">30-45 day options | $200 profit target | Scans at 10am, 12pm, 2pm & 3:30pm ET</p></div>
   <div style="display:flex;gap:8px">
     <a href="/combined" style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:7px 16px;font-size:12px;color:#e8e8e8;text-decoration:none">Combined View</a>
     <button class="rb" onclick="location.reload()">Refresh</button>
