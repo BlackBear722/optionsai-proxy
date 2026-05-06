@@ -2280,6 +2280,60 @@ async function buildTrendWatchlist() {
 }
 
 // ── Trend Position Monitor — runs every 30 min during market hours ─────────
+// ── Gap Protection — runs at 9:05am to catch overnight gaps through stop loss ─
+async function gapProtectionCheck() {
+  try {
+    var openPos = await pool.query("SELECT * FROM trend_positions WHERE status='open'");
+    if (!openPos.rows.length) return;
+    await trendLog('entry', '🌅 Gap protection check — ' + openPos.rows.length + ' open position(s)');
+
+    for (var i = 0; i < openPos.rows.length; i++) {
+      var pos = openPos.rows[i];
+      try {
+        // Fetch current premarket/opening price
+        var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=1m&range=1d', {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        });
+        var data = await r.json();
+        var meta = data && data.chart && data.chart.result && data.chart.result[0] && data.chart.result[0].meta;
+        var currentStockPrice = meta && meta.regularMarketPrice ? parseFloat(meta.regularMarketPrice) : null;
+        if (!currentStockPrice) continue;
+
+        var entryPrice = parseFloat(pos.entry_price) || 0;
+        var entryStrike = parseFloat(pos.strike) || currentStockPrice;
+        var stockMove = currentStockPrice - entryStrike;
+        var pctMove = entryStrike > 0 ? ((currentStockPrice - entryStrike) / entryStrike) : 0;
+        var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
+        if (pos.direction === 'PUT') delta = -delta;
+        var estimatedOptionPrice = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
+        var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100 * (pos.contracts || 1);
+        var hardStop = entryPrice * 0.60;
+
+        await trendLog('entry', 'Gap check ' + pos.ticker + ': stock=$' + currentStockPrice.toFixed(2) +
+          ' option~$' + estimatedOptionPrice.toFixed(2) +
+          ' stop=$' + hardStop.toFixed(2) +
+          ' pnl=$' + pnlPerContract.toFixed(0));
+
+        // If option is below hard stop — close immediately
+        if (estimatedOptionPrice <= hardStop) {
+          await pool.query(
+            "UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2",
+            [pnlPerContract.toFixed(2), pos.id]
+          );
+          await trendLog('stop', '🚨 GAP PROTECTION: ' + pos.ticker + ' opened below stop loss — closed at $' +
+            pnlPerContract.toFixed(0) + ' (stock gapped to $' + currentStockPrice.toFixed(2) + ')');
+        } else {
+          await trendLog('entry', 'Gap check ' + pos.ticker + ' OK — above stop loss');
+        }
+      } catch(posErr) {
+        console.error('Gap check error for ' + pos.ticker + ':', posErr.message);
+      }
+    }
+  } catch(e) {
+    console.error('gapProtectionCheck error:', e.message);
+  }
+}
+
 // In-memory peak price tracker for trend trailing stops { posId: peakOptionPrice }
 var trendPeakPrices = {};
 
@@ -2394,6 +2448,16 @@ async function runTrendScanLogic() {
   try {
   var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   var todayStr = etNow.toLocaleDateString('en-CA');
+  var etHour = etNow.getHours(), etMin = etNow.getMinutes(), etDay = etNow.getDay();
+
+  // HARD MARKET HOURS GATE — no new positions outside 9:30am-3:45pm ET Mon-Fri
+  var isWeekday = etDay >= 1 && etDay <= 5;
+  var minOfDay = etHour * 60 + etMin;
+  if (!isWeekday || minOfDay < 570 || minOfDay > 945) {
+    await trendLog('skip', 'Market closed (' + etHour + ':' + String(etMin).padStart(2,'0') + ' ET) — no new positions allowed');
+    return;
+  }
+
   await trendLog('entry', 'Trend scan running — ' + todayStr);
 
   // Fix 2: Fetch full open position rows (not just count) for ticker checking
@@ -2677,8 +2741,9 @@ pool.connect()
     scheduleMidnightReset();
     scheduleMarketOpenRestart();
     initTrendDB().then(function() {
-      // Check for trend scan every minute (only fires at 10am)
+      // Check for trend scan every minute (only fires at scheduled times)
       setInterval(function() { runTrendScan().catch(console.error); }, 60 * 1000);
+
       // Monitor open trend positions every 30 minutes during market hours
       setInterval(function() {
         var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2686,7 +2751,19 @@ pool.connect()
         var h = etNow.getHours();
         if (isWd && h >= 9 && h < 16) monitorTrendPositions().catch(console.error);
       }, 30 * 60 * 1000);
-      console.log('Trend bot initialized — scans at 10am ET, monitors every 30min');
+
+      // Gap protection — runs at 9:05am ET every weekday
+      // Closes any positions that gapped through their stop loss overnight
+      setInterval(function() {
+        var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
+        var h = etNow.getHours(), m = etNow.getMinutes();
+        if (isWd && h === 9 && m >= 5 && m <= 7) {
+          gapProtectionCheck().catch(console.error);
+        }
+      }, 60 * 1000);
+
+      console.log('Trend bot initialized — scans 4x daily, monitors every 30min, gap check at 9:05am');
     }).catch(function(e) { console.error('Trend init error:', e.message); });
 
     // ── Smart startup: auto-restart engine if market is open and engine was running ──
