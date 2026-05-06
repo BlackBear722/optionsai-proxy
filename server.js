@@ -1810,6 +1810,35 @@ app.get('/api/combined-stats', async function(req, res) {
     var trendWr = trendClosed.length ? (trendWins.length/trendClosed.length*100).toFixed(1) : '0';
     var trendOpenPos = trendTrades.rows.filter(function(t){return t.status==='open';});
 
+    // Fetch current stock price for each open trend position
+    for (var opi = 0; opi < trendOpenPos.length; opi++) {
+      var op = trendOpenPos[opi];
+      try {
+        var opR = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + op.ticker + '?interval=1d&range=1d', {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        });
+        var opData = await opR.json();
+        var opMeta = opData && opData.chart && opData.chart.result && opData.chart.result[0] && opData.chart.result[0].meta;
+        var currentStockPrice = opMeta && opMeta.regularMarketPrice ? parseFloat(opMeta.regularMarketPrice) : null;
+        if (currentStockPrice) {
+          var entryStrike = parseFloat(op.strike) || currentStockPrice;
+          var stockMove = currentStockPrice - entryStrike;
+          var pctMove = entryStrike > 0 ? ((currentStockPrice - entryStrike) / entryStrike) : 0;
+          var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
+          if (op.direction === 'PUT') delta = -delta;
+          var entryPrice = parseFloat(op.entry_price) || 0;
+          var currentOptionEst = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
+          var pnlNow = (currentOptionEst - entryPrice) * 100 * (op.contracts || 1);
+          var pnlPct = entryPrice > 0 ? ((currentOptionEst - entryPrice) / entryPrice * 100) : 0;
+          op.currentStockPrice = currentStockPrice.toFixed(2);
+          op.currentOptionEst = currentOptionEst.toFixed(2);
+          op.pnlNow = pnlNow.toFixed(0);
+          op.pnlPct = pnlPct.toFixed(1);
+          op.daysHeld = Math.floor((Date.now() - new Date(op.entered_at)) / (1000 * 60 * 60 * 24));
+        }
+      } catch(opErr) { console.error('price fetch for ' + op.ticker + ':', opErr.message); }
+    }
+
     var engineOn = await getState('engineOn', false);
     var dailyProfit = await getState('dailyProfit', 0);
     var dailyLoss = await getState('dailyLoss', 0);
@@ -2940,12 +2969,45 @@ function refreshDashboard() {
     var ttb=document.getElementById('ttb');
     ttb.innerHTML=d.trend.openPositions.length?d.trend.openPositions.map(function(p){
       var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
-      var daysHeld=Math.floor((Date.now()-new Date(p.entered_at))/(1000*60*60*24));
       var entryP=parseFloat(p.entry_price)||0;
       var targetP=parseFloat(p.target_price)||0;
       var stopP=parseFloat(p.stop_price)||0;
-      return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span><span class="badge bo">Open</span><span style="color:#888;font-size:10px">$'+entryP.toFixed(2)+'→$'+targetP.toFixed(2)+'</span></div>';
-    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm & 2pm ET</div>';
+      var currOpt=parseFloat(p.currentOptionEst)||entryP;
+      var pnlNow=parseFloat(p.pnlNow)||0;
+      var pnlPct=parseFloat(p.pnlPct)||0;
+      var daysHeld=p.daysHeld||0;
+      var pnlColor=pnlNow>=0?'#1D9E75':'#E24B4A';
+      // Progress bar: 0% = stop, 100% = target
+      var range=targetP-stopP;
+      var progress=range>0?Math.min(100,Math.max(0,((currOpt-stopP)/range)*100)):0;
+      var progressColor=progress>66?'#1D9E75':progress>33?'#BA7517':'#E24B4A';
+      return '<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span style="font-weight:600;font-size:13px">'+p.ticker+'</span>' +
+            '<span style="font-size:11px;color:#888">'+p.direction+'</span>' +
+            '<span class="badge bo">Day '+daysHeld+'</span>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<span style="font-size:14px;font-weight:600;color:'+pnlColor+'">'+(pnlNow>=0?'+':'')+'$'+pnlNow+'</span>' +
+            '<span style="font-size:11px;color:'+pnlColor+';margin-left:4px">('+pnlPct+'%)</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:6px">' +
+          '<span>Entry <span style="color:#aaa">$'+entryP.toFixed(2)+'</span></span>' +
+          '<span>Now <span style="color:#fff;font-weight:500">$'+currOpt.toFixed(2)+'</span></span>' +
+          '<span>Target <span style="color:#1D9E75">$'+targetP.toFixed(2)+'</span></span>' +
+        '</div>' +
+        '<div style="background:#222;border-radius:4px;height:6px;overflow:hidden">' +
+          '<div style="background:'+progressColor+';height:100%;width:'+progress.toFixed(0)+'%;transition:width 0.5s;border-radius:4px"></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px">' +
+          '<span>Stop $'+stopP.toFixed(2)+'</span>' +
+          '<span>Stock: $'+(p.currentStockPrice||'—')+'</span>' +
+          '<span>$200 target</span>' +
+        '</div>' +
+      '</div>';
+    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm, 2pm & 3:30pm ET</div>';
 
     // Update last refresh time
     document.getElementById('lu').textContent='Updated '+new Date().toLocaleTimeString();
