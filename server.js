@@ -3042,15 +3042,70 @@ function refreshDashboard(){
 var secs=30;
 setInterval(function(){secs--;if(secs<=0)secs=30;var e=document.getElementById('countdown');if(e)e.textContent=secs+'s';},1000);
 
-// Initial render from server data
-renderLog(D.scalperLogs,'scalper-log');
-renderLog(D.trendLogs,'trend-log');
-renderScalperTrades(D.scalper.recent,'stb');
-renderScalperTrades(D.scalper.recent,'o-stb');
-renderTrendPositions(D.trend.openPositions,'ttb');
-renderTrendPositions(D.trend.openPositions,'o-ttb');
-refreshDashboard();
-setInterval(refreshDashboard,30000);
+// Initial render — use server data first, then keep refreshing
+function initialRender(d, logs) {
+  // Overview
+  var sp=parseFloat(d.scalper.pnl)||0, tp=parseFloat(d.trend.pnl)||0;
+  var td=(parseFloat(d.engine.dailyProfit)||0)-(parseFloat(d.engine.dailyLoss)||0);
+  var swr=parseFloat(d.scalper.wr)||0, twr=parseFloat(d.trend.wr)||0;
+  var cp=parseFloat(d.totalPnl)||0;
+
+  function setEl(id, text, color) { var e=document.getElementById(id); if(e){e.textContent=text;if(color)e.style.color=color;} }
+  function setPnl(id, val) { var e=document.getElementById(id);if(!e)return;e.textContent=(val>=0?'+':'')+'$'+Math.abs(val).toFixed(2);e.className='mv '+(val>0?'pos':val<0?'neg':'neu'); }
+
+  setPnl('cpnl', cp);
+  var tde=document.getElementById('ctd');if(tde){tde.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);tde.className='mv '+(td>0?'pos':td<0?'neg':'neu');}
+  var swe=document.getElementById('o-swr');if(swe){swe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.className='mv '+(swr>=50?'pos':swr>0?'neg':'neu');}
+  setEl('ctp', d.trend.openPositions.length+'/2');
+
+  // Overview cards
+  var ospe=document.getElementById('o-spnl');if(ospe){ospe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);ospe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';}
+  var oswe=document.getElementById('o-swr2');if(oswe){oswe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';oswe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';}
+  setEl('o-str', d.scalper.trades);
+  var otpe=document.getElementById('o-tpnl');if(otpe){otpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);otpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';}
+  var otwe=document.getElementById('o-twr');if(otwe){otwe.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';otwe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';}
+  setEl('o-top', d.trend.openPositions.length+'/2');
+
+  // Scalper view
+  setPnl('spnl', sp);
+  var swre=document.getElementById('swr');if(swre){swre.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swre.className='mv '+(swr>=50?'pos':swr>0?'neg':'neu');}
+  var std=document.getElementById('s-today');if(std){std.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);std.className='mv '+(td>0?'pos':td<0?'neg':'neu');}
+  setEl('str', d.scalper.trades);
+  setEl('strades', (d.engine.todayTradeCount||0)+'/'+(d.settings.maxDailyTrades||5)+' trades');
+  setEl('slosses', (d.engine.todayLossCount||0)+'/'+(d.settings.maxDailyLosses||3)+' losses');
+  setEl('sconsec', (d.engine.todayConsecLosses||0)+' consec');
+  updateEngine(d.engine.on);
+
+  // Trend view
+  setPnl('tpnl', tp);
+  var twre=document.getElementById('twr');if(twre){twre.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';twre.className='mv '+(twr>=50?'pos':twr>0?'neg':'neu');}
+  setEl('twl', d.trend.wins+' / '+d.trend.losses);
+  setEl('top', d.trend.openPositions.length+'/2');
+
+  // Trades and positions
+  renderScalperTrades(d.scalper.recent,'stb');
+  renderScalperTrades(d.scalper.recent,'o-stb');
+  renderTrendPositions(d.trend.openPositions,'ttb');
+  renderTrendPositions(d.trend.openPositions,'o-ttb');
+
+  // Logs
+  if(logs) {
+    if(logs.scalperLogs) renderLog(logs.scalperLogs,'scalper-log');
+    if(logs.trendLogs) renderLog(logs.trendLogs,'trend-log');
+  } else {
+    renderLog(D.scalperLogs,'scalper-log');
+    renderLog(D.trendLogs,'trend-log');
+  }
+
+  setEl('lu', 'Updated '+new Date().toLocaleTimeString());
+}
+
+// Render immediately with server-side data
+initialRender(D, null);
+
+// Then keep refreshing from API
+setInterval(refreshDashboard, 30000);
+setTimeout(refreshDashboard, 1000);
 <\/script>
 </body>
 </html>`);
