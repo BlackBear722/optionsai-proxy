@@ -2381,12 +2381,31 @@ async function monitorTrendPositions() {
   } catch(e) { console.error('monitorTrendPositions error:', e.message); }
 }
 
+// Mutex to prevent concurrent scans
+var trendScanRunning = false;
+
 async function runTrendScanLogic() {
+  // Fix 1: Race condition guard
+  if (trendScanRunning) {
+    await trendLog('skip', 'Scan already in progress — skipping concurrent scan');
+    return;
+  }
+  trendScanRunning = true;
+  try {
   var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   var todayStr = etNow.toLocaleDateString('en-CA');
   await trendLog('entry', 'Trend scan running — ' + todayStr);
-  var openPos = await pool.query("SELECT COUNT(*) FROM trend_positions WHERE status='open'");
-  if (parseInt(openPos.rows[0].count) >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
+
+  // Fix 2: Fetch full open position rows (not just count) for ticker checking
+  var openPos = await pool.query("SELECT * FROM trend_positions WHERE status='open'");
+  if (openPos.rows.length >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
+
+  // Fix 3: Same-ticker cooldown — don't open same ticker twice in one day
+  var todayRows = await pool.query("SELECT DISTINCT ticker FROM trend_positions WHERE entered_at::date = CURRENT_DATE");
+  var todayTickerList = todayRows.rows.map(function(r) { return r.ticker; });
+  if (todayTickerList.length > 0) {
+    await trendLog('entry', 'Already traded today: ' + todayTickerList.join(', ') + ' — will skip these');
+  }
   var spyData = await fetchDailyCandles('SPY');
   var spyTrend2 = spyData ? spyData.trend : 'UNKNOWN';
   await trendLog('entry', 'SPY daily trend: ' + spyTrend2);
@@ -2396,6 +2415,17 @@ async function runTrendScanLogic() {
   var expiry = expDate.getFullYear() + '-' + ('0'+(expDate.getMonth()+1)).slice(-2) + '-' + ('0'+expDate.getDate()).slice(-2);
   for (var i = 0; i < watchlist2.length; i++) {
     var ticker = watchlist2[i];
+
+    // Fix 3: Skip if ticker already traded today or already in open position
+    if (todayTickerList.indexOf(ticker) >= 0) {
+      await trendLog('skip', ticker + ' already opened today — cooldown active');
+      continue;
+    }
+    if (openPos.rows.some(function(p) { return p.ticker === ticker; })) {
+      await trendLog('skip', ticker + ' already in open position — skipping');
+      continue;
+    }
+
     var d2 = await fetchDailyCandles(ticker);
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
@@ -2433,12 +2463,17 @@ async function runTrendScanLogic() {
          result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice2.toFixed(2), result2.reason]
       );
       await trendLog('trade', 'OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' entry=$' + result2.premium + ' target=$' + targetPrice.toFixed(2) + ' stop=$' + stopPrice2.toFixed(2));
+      // Fix 4: Run monitor immediately after opening so stop loss is active right away
+      setTimeout(function() { monitorTrendPositions().catch(console.error); }, 5000);
       break;
     }
     await new Promise(function(r3) { setTimeout(r3, 1000); });
   }
   await trendLog('entry', 'Scan complete');
   trendLastScan = todayStr;
+  } finally {
+    trendScanRunning = false;
+  }
 }
 
 // Track which scan windows have fired today: { 'YYYY-MM-DD': { s1: bool, s2: bool, s3: bool } }
