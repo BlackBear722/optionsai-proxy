@@ -2630,163 +2630,215 @@ app.get('/combined', async function(req, res) {
       trendLogs: trendLogs
     };
 
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>OptionsAI</title>
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OptionsAI</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f0f;color:#e8e8e8;padding:20px}
-h1{font-size:22px;font-weight:500;color:#fff;margin-bottom:4px}
-.sub{font-size:12px;color:#666;margin-bottom:20px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#e8e8e8;min-height:100vh}
+/* ── Nav ── */
+.nav{background:#111;border-bottom:1px solid #1e1e1e;padding:0 20px;display:flex;align-items:center;gap:0;position:sticky;top:0;z-index:100}
+.nav-logo{font-size:15px;font-weight:600;color:#fff;padding:14px 20px 14px 0;border-right:1px solid #1e1e1e;margin-right:4px;letter-spacing:-0.3px}
+.tab{padding:14px 18px;font-size:13px;color:#666;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;white-space:nowrap}
+.tab:hover{color:#aaa}
+.tab.active{color:#fff;border-bottom-color:#1D9E75}
+.tab-scalper.active{border-bottom-color:#3B82F6}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:12px;padding:8px 0}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#1D9E75;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+/* ── Views ── */
+.view{display:none;padding:20px;max-width:1200px;margin:0 auto}
+.view.active{display:block}
+/* ── Metrics ── */
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .g2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:16px}
-.metric{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px}
-.ml{font-size:11px;color:#888;margin-bottom:6px;text-transform:uppercase}
-.mv{font-size:22px;font-weight:500}
+.metric{background:#141414;border:1px solid #1e1e1e;border-radius:10px;padding:14px 16px}
+.ml{font-size:11px;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+.mv{font-size:24px;font-weight:600}
 .pos{color:#1D9E75}.neg{color:#E24B4A}.neu{color:#fff}
-.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}
-.card-full{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:16px 20px;margin-bottom:16px}
+/* ── Cards ── */
+.card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:16px 20px;margin-bottom:16px}
 .ch{font-size:13px;font-weight:500;color:#fff;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
-.ct{font-size:11px;color:#888;text-transform:uppercase;margin-bottom:10px}
-.tr{display:grid;grid-template-columns:70px 55px 45px 55px 55px 50px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid #1f1f1f}
-.tr:last-child{border-bottom:none}.th{color:#555}
-.badge{padding:2px 7px;border-radius:999px;font-size:10px;font-weight:500}
-.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#2a2a1a;color:#BA7517}
-.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
-.don{background:#1D9E75}.dof{background:#555}
-.btn{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:6px 14px;font-size:12px;color:#e8e8e8;cursor:pointer;text-decoration:none;display:inline-block}
-.btn:hover{background:#222}
-.btn-green{background:#0a2e1f;border:1px solid #1D9E75;color:#1D9E75}
+.ct{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px}
+/* ── Trades table ── */
+.tr{display:grid;grid-template-columns:70px 55px 45px 55px 55px 50px;gap:6px;font-size:11px;padding:7px 0;border-bottom:1px solid #1a1a1a}
+.tr:last-child{border-bottom:none}.th{color:#444}
+/* ── Badges ── */
+.badge{padding:2px 8px;border-radius:999px;font-size:10px;font-weight:500;display:inline-block}
+.bw{background:#0a2e1f;color:#1D9E75}.bl{background:#2e0a0a;color:#E24B4A}.bo{background:#1e1e0a;color:#BA7517}
+/* ── Buttons ── */
+.btn{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:6px 14px;font-size:12px;color:#e8e8e8;cursor:pointer;text-decoration:none;display:inline-block;transition:background .15s}
+.btn:hover{background:#1e1e1e}
+.btn-green{background:#0a2e1f;border-color:#1D9E75;color:#1D9E75}
 .btn-green:hover{background:#0d3d26}
-.btn-red{background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A}
-.btn-red:hover{background:#3d0d0d}
-.toggle{display:flex;align-items:center;gap:10px}
-.sw{position:relative;width:40px;height:22px;cursor:pointer}
+/* ── Toggle ── */
+.sw{position:relative;width:40px;height:22px;cursor:pointer;display:inline-block}
 .sw input{opacity:0;width:0;height:0}
-.sl{position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:22px;transition:.3s}
-.sl:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background:#888;border-radius:50%;transition:.3s}
+.sl{position:absolute;top:0;left:0;right:0;bottom:0;background:#2a2a2a;border-radius:22px;transition:.3s}
+.sl:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background:#666;border-radius:50%;transition:.3s}
 input:checked+.sl{background:#1D9E75}
 input:checked+.sl:before{transform:translateX(18px);background:#fff}
-.field{display:flex;flex-direction:column;gap:4px}
-.field label{font-size:11px;color:#888;text-transform:uppercase}
-.field input{background:#111;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;font-size:13px;color:#e8e8e8;width:100%}
-.field input:focus{outline:none;border-color:#444}
+/* ── Settings grid ── */
 .sg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
 .sg2{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
-.status-row{display:flex;gap:12px;font-size:12px;color:#666;margin-bottom:14px;flex-wrap:wrap}
-.status-pill{background:#111;border:1px solid #222;border-radius:6px;padding:4px 10px}
+.field label{font-size:11px;color:#555;text-transform:uppercase;display:block;margin-bottom:4px}
+.field input{background:#0f0f0f;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;font-size:13px;color:#e8e8e8;width:100%}
+.field input:focus{outline:none;border-color:#333}
+/* ── Status pills ── */
+.pill{background:#0f0f0f;border:1px solid #1e1e1e;border-radius:6px;padding:3px 10px;font-size:11px;color:#666}
+/* ── Log ── */
+.log-row{display:grid;grid-template-columns:75px 45px 1fr;gap:6px;padding:3px 0;border-bottom:1px solid #111;font-size:11px}
+/* ── Position card ── */
+.pos-card{background:#0f0f0f;border:1px solid #1e1e1e;border-radius:10px;padding:12px 14px;margin-bottom:10px}
+/* ── Dot ── */
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.don{background:#1D9E75}.dof{background:#444}
 @media(max-width:700px){.g4{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}.sg{grid-template-columns:repeat(2,1fr)}}
-</style></head><body>
-
-<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
-  <div><h1>OptionsAI</h1><div class="sub">Scalping bot + trend following bot</div></div>
-  <div style="display:flex;align-items:center;gap:10px">
-    <span id="lu" style="font-size:11px;color:#555">Loading...</span>
-    <span style="font-size:11px;color:#555" id="countdown"></span>
-    <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;display:inline-block;animation:pulse 2s infinite"></span>
-  </div>
-</div>
-<style>
-@keyframes pulse{0%{opacity:1}50%{opacity:0.3}100%{opacity:1}}
 </style>
+</head>
+<body>
 
-<div class="g4">
-  <div class="metric"><div class="ml">Combined P&L</div><div class="mv" id="cpnl">—</div></div>
-  <div class="metric"><div class="ml">Today P&L</div><div class="mv" id="ctd">—</div></div>
-  <div class="metric"><div class="ml">Scalper W/L</div><div class="mv neu" id="swl">—</div></div>
-  <div class="metric"><div class="ml">Trend Positions</div><div class="mv neu" id="ctp">—</div></div>
-</div>
+<!-- ── Navigation ─────────────────────────────────────────────────────────── -->
+<nav class="nav">
+  <div class="nav-logo">OptionsAI</div>
+  <div class="tab tab-overview active" onclick="showView('overview')">Overview</div>
+  <div class="tab tab-scalper" onclick="showView('scalper')">⚡ Scalper</div>
+  <div class="tab tab-trend" onclick="showView('trend')">📈 Trend Bot</div>
+  <div class="nav-right">
+    <span id="lu" style="font-size:11px;color:#444"></span>
+    <span id="countdown" style="font-size:11px;color:#444"></span>
+    <span class="live-dot"></span>
+  </div>
+</nav>
 
-<div class="g2">
-
-  <!-- SCALPING BOT -->
-  <div>
-    <div class="card">
+<!-- ── Overview View ──────────────────────────────────────────────────────── -->
+<div class="view active" id="view-overview">
+  <div class="g4" style="margin-top:20px">
+    <div class="metric"><div class="ml">Combined P&L</div><div class="mv" id="cpnl">—</div></div>
+    <div class="metric"><div class="ml">Today P&L</div><div class="mv" id="ctd">—</div></div>
+    <div class="metric"><div class="ml">Scalper Win Rate</div><div class="mv" id="o-swr">—</div></div>
+    <div class="metric"><div class="ml">Trend Positions</div><div class="mv neu" id="ctp">—</div></div>
+  </div>
+  <div class="g2">
+    <div class="card" style="cursor:pointer" onclick="showView('scalper')">
       <div class="ch">
-        <div style="display:flex;align-items:center;gap:8px"><span class="dot" id="ed"></span><span>Scalping Bot</span><span style="font-size:11px;color:#666;font-weight:400">5-min options</span></div>
-        <div class="toggle">
-          <label class="sw"><input type="checkbox" id="etoggle" onchange="toggleEngine(this.checked)"><span class="sl"></span></label>
-          <span id="el" style="font-size:12px;color:#888"></span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="dot" id="ed"></span>
+          <span>Scalping Bot</span>
+          <span style="font-size:11px;color:#555">5-min options</span>
         </div>
+        <span style="font-size:11px;color:#555">→ View</span>
       </div>
-
-      <div class="status-row">
-        <span class="status-pill" id="strades">0/5 trades</span>
-        <span class="status-pill" id="slosses">0/3 losses</span>
-        <span class="status-pill" id="sconsec">0 consec</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div><div class="ct">All-time P&L</div><div style="font-size:16px;font-weight:600" id="o-spnl">—</div></div>
+        <div><div class="ct">Win Rate</div><div style="font-size:16px;font-weight:600" id="o-swr2">—</div></div>
+        <div><div class="ct">Trades</div><div style="font-size:16px;font-weight:600;color:#fff" id="o-str">—</div></div>
       </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-        <div><div class="ct">All-time P&L</div><div style="font-size:15px;font-weight:500" id="spnl">—</div></div>
-        <div><div class="ct">Win Rate</div><div style="font-size:15px;font-weight:500" id="swr">—</div></div>
-        <div><div class="ct">Trades</div><div style="font-size:15px;font-weight:500;color:#fff" id="str">—</div></div>
-      </div>
-
-      <div class="ct">Recent Trades</div>
-      <div class="tr th"><span>Time</span><span>Ticker</span><span>Type</span><span>Result</span><span>P&L</span></div>
-      <div id="stb"></div>
     </div>
-
-    <div class="card">
-      <div class="ch"><span>Scalper Settings</span><button class="btn btn-green" onclick="saveSettings()" style="font-size:11px;padding:4px 12px">Save</button></div>
-      <div class="sg">
-        <div class="field"><label>Profit Target $</label><input id="profitTarget" type="number" step="0.05"></div>
-        <div class="field"><label>Stop Loss $</label><input id="stopLoss" type="number" step="0.05"></div>
-        <div class="field"><label>Trail Activate $</label><input id="trailActivate" type="number" step="0.05"></div>
-        <div class="field"><label>Trail Amount $</label><input id="trailAmount" type="number" step="0.05"></div>
-        <div class="field"><label>Max Hold (min)</label><input id="maxHoldMinutes" type="number" step="1"></div>
-        <div class="field"><label>Contracts</label><input id="contracts" type="number" step="1"></div>
-      </div>
-      <div class="sg2">
-        <div class="field"><label>Max Daily Trades</label><input id="maxDailyTrades" type="number" step="1"></div>
-        <div class="field"><label>Max Daily Losses</label><input id="maxDailyLosses" type="number" step="1"></div>
-      </div>
-      <div id="saveMsg" style="font-size:12px;color:#1D9E75;display:none;margin-top:8px">✓ Settings saved</div>
-    </div>
-  </div>
-
-  <!-- TREND BOT -->
-  <div>
-    <div class="card">
+    <div class="card" style="cursor:pointer" onclick="showView('trend')">
       <div class="ch">
-        <div style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:#BA7517"></span><span>Trend Bot</span><span style="font-size:11px;color:#666;font-weight:400">35-day options</span></div>
-        <button class="btn" style="font-size:11px;padding:4px 12px" onclick="forceTrendScan()">Force Scan</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="dot" style="background:#BA7517"></span>
+          <span>Trend Bot</span>
+          <span style="font-size:11px;color:#555">35-day options</span>
+        </div>
+        <span style="font-size:11px;color:#555">→ View</span>
       </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-        <div><div class="ct">P&L</div><div style="font-size:15px;font-weight:500" id="tpnl">—</div></div>
-        <div><div class="ct">Win Rate</div><div style="font-size:15px;font-weight:500" id="twr">—</div></div>
-        <div><div class="ct">Trades</div><div style="font-size:15px;font-weight:500;color:#fff" id="ttr">—</div></div>
-      </div>
-
-      <div class="ct">Open Positions</div>
-      <div id="ttb"></div>
-    </div>
-
-    <div class="card">
-      <div class="ch"><span>Quick Links</span></div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <a href="/dashboard" class="btn" style="text-align:center">📊 Scalper Full Dashboard</a>
-        <a href="/trend/dashboard" class="btn" style="text-align:center">📈 Trend Full Dashboard</a>
-        <a href="/api/journal" class="btn" style="text-align:center">📋 Journal (JSON)</a>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div><div class="ct">All-time P&L</div><div style="font-size:16px;font-weight:600" id="o-tpnl">—</div></div>
+        <div><div class="ct">Win Rate</div><div style="font-size:16px;font-weight:600" id="o-twr">—</div></div>
+        <div><div class="ct">Open</div><div style="font-size:16px;font-weight:600;color:#fff" id="o-top">—</div></div>
       </div>
     </div>
   </div>
-
+  <div class="g2">
+    <div class="card">
+      <div class="ct">Scalper Recent Trades</div>
+      <div class="tr th"><span>Time</span><span>Ticker</span><span>Type</span><span>Result</span><span>P&L</span><span></span></div>
+      <div id="o-stb"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Trend Open Positions</div>
+      <div id="o-ttb"></div>
+    </div>
+  </div>
 </div>
 
-<div class="g2" style="margin-top:4px">
-  <div class="card-full">
-    <div class="ch" style="margin-bottom:10px">
-      <span>⚡ Scalper Activity Log</span>
-      <span style="font-size:11px;color:#666;font-weight:400">live · refreshes every 30s</span>
+<!-- ── Scalper View ───────────────────────────────────────────────────────── -->
+<div class="view" id="view-scalper">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:20px 0 16px">
+    <div>
+      <h2 style="font-size:18px;font-weight:600;color:#fff">Scalping Bot</h2>
+      <p style="font-size:12px;color:#555;margin-top:2px">5-minute options · 9:30–11:00am ET</p>
     </div>
-    <div id="scalper-log" style="max-height:340px;overflow-y:auto"></div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <label class="sw"><input type="checkbox" id="etoggle" onchange="toggleEngine(this.checked)"><span class="sl"></span></label>
+      <span id="el" style="font-size:12px;color:#666"></span>
+    </div>
   </div>
-  <div class="card-full">
-    <div class="ch" style="margin-bottom:10px">
-      <span>📈 Trend Bot Log</span>
-      <span style="font-size:11px;color:#666;font-weight:400">live · refreshes every 30s</span>
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <span class="pill" id="strades">—</span>
+    <span class="pill" id="slosses">—</span>
+    <span class="pill" id="sconsec">—</span>
+  </div>
+  <div class="g4">
+    <div class="metric"><div class="ml">All-time P&L</div><div class="mv" id="spnl">—</div></div>
+    <div class="metric"><div class="ml">Win Rate</div><div class="mv" id="swr">—</div></div>
+    <div class="metric"><div class="ml">Today P&L</div><div class="mv" id="s-today">—</div></div>
+    <div class="metric"><div class="ml">Total Trades</div><div class="mv neu" id="str">—</div></div>
+  </div>
+  <div class="card">
+    <div class="ch"><span>Recent Trades</span></div>
+    <div class="tr th"><span>Time</span><span>Ticker</span><span>Type</span><span>Result</span><span>P&L</span><span></span></div>
+    <div id="stb"></div>
+  </div>
+  <div class="card">
+    <div class="ch"><span>Settings</span><button class="btn btn-green" onclick="saveSettings()" style="font-size:11px;padding:4px 12px">Save</button></div>
+    <div class="sg">
+      <div class="field"><label>Profit Target $</label><input id="profitTarget" type="number" step="0.05"></div>
+      <div class="field"><label>Stop Loss $</label><input id="stopLoss" type="number" step="0.05"></div>
+      <div class="field"><label>Trail Activate $</label><input id="trailActivate" type="number" step="0.05"></div>
+      <div class="field"><label>Trail Amount $</label><input id="trailAmount" type="number" step="0.05"></div>
+      <div class="field"><label>Max Hold (min)</label><input id="maxHoldMinutes" type="number" step="1"></div>
+      <div class="field"><label>Contracts</label><input id="contracts" type="number" step="1"></div>
     </div>
-    <div id="trend-log" style="max-height:340px;overflow-y:auto"></div>
+    <div class="sg2">
+      <div class="field"><label>Max Daily Trades</label><input id="maxDailyTrades" type="number" step="1"></div>
+      <div class="field"><label>Max Daily Losses</label><input id="maxDailyLosses" type="number" step="1"></div>
+    </div>
+    <div id="saveMsg" style="font-size:12px;color:#1D9E75;display:none;margin-top:8px">✓ Saved</div>
+  </div>
+  <div class="card">
+    <div class="ch"><span>Activity Log</span><span style="font-size:11px;color:#555">last 80 entries</span></div>
+    <div id="scalper-log" style="max-height:400px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- ── Trend Bot View ─────────────────────────────────────────────────────── -->
+<div class="view" id="view-trend">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:20px 0 16px">
+    <div>
+      <h2 style="font-size:18px;font-weight:600;color:#fff">Trend Following Bot</h2>
+      <p style="font-size:12px;color:#555;margin-top:2px">30-45 day options · scans at 10am, 12pm, 2pm & 3:30pm ET</p>
+    </div>
+    <button class="btn" onclick="forceTrendScan()" style="font-size:12px">Force Scan</button>
+  </div>
+  <div class="g4">
+    <div class="metric"><div class="ml">Total P&L</div><div class="mv" id="tpnl">—</div></div>
+    <div class="metric"><div class="ml">Win Rate</div><div class="mv" id="twr">—</div></div>
+    <div class="metric"><div class="ml">Wins / Losses</div><div class="mv neu" id="twl">—</div></div>
+    <div class="metric"><div class="ml">Open Positions</div><div class="mv neu" id="top">—</div></div>
+  </div>
+  <div class="card">
+    <div class="ch"><span>Open Positions</span></div>
+    <div id="ttb"></div>
+  </div>
+  <div class="card">
+    <div class="ch"><span>Activity Log</span><span style="font-size:11px;color:#555">last 40 entries</span></div>
+    <div id="trend-log" style="max-height:400px;overflow-y:auto"></div>
   </div>
 </div>
 
@@ -2794,269 +2846,214 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 var D=` + JSON.stringify(combined) + `;
 var BASE='';
 
-// ── Top metrics ──────────────────────────────────────────────────────────────
-var cp=parseFloat(D.totalPnl)||0;
-var cpe=document.getElementById('cpnl');cpe.textContent=(cp>=0?'+':'')+'$'+Math.abs(cp).toFixed(2);cpe.className='mv '+(cp>0?'pos':cp<0?'neg':'neu');
-var td=(parseFloat(D.engine.dailyProfit)||0)-(parseFloat(D.engine.dailyLoss)||0);
-var tde=document.getElementById('ctd');tde.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);tde.className='mv '+(td>0?'pos':td<0?'neg':'neu');
-document.getElementById('swl').textContent=D.scalper.wins+' / '+D.scalper.losses;
-document.getElementById('ctp').textContent=D.trend.openPositions.length+'/2';
+// ── View switching ────────────────────────────────────────────────────────────
+function showView(name) {
+  document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  document.getElementById('view-'+name).classList.add('active');
+  document.querySelector('.tab-'+name).classList.add('active');
+  localStorage.setItem('oa-view', name);
+}
+// Restore last view
+var lastView = localStorage.getItem('oa-view') || 'overview';
+showView(lastView);
 
-// ── Scalper engine toggle ────────────────────────────────────────────────────
-var dot=document.getElementById('ed');
-var etog=document.getElementById('etoggle');
-var el=document.getElementById('el');
-function updateEngine(on){dot.className='dot '+(on?'don':'dof');etog.checked=on;el.textContent=on?'Running':'Off';}
+// ── Helpers ───────────────────────────────────────────────────────────────────
+var logColors = { trade:'#1D9E75', stop:'#E24B4A', entry:'#888', skip:'#444' };
+
+function pnlEl(val, el, size) {
+  var v = parseFloat(val)||0;
+  el.textContent = (v>=0?'+':'')+'$'+Math.abs(v).toFixed(2);
+  el.className = 'mv '+(v>0?'pos':v<0?'neg':'neu');
+  if(size) el.style.fontSize = size;
+}
+
+function renderLog(logs, id) {
+  var el = document.getElementById(id); if(!el) return;
+  if(!logs||!logs.length){el.innerHTML='<div style="color:#444;font-size:12px;padding:8px">No activity yet</div>';return;}
+  el.innerHTML = logs.map(function(l){
+    var ts = new Date(l.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    var c = logColors[l.type]||'#444';
+    var mc = l.type==='trade'?'#1D9E75':l.type==='stop'?'#E24B4A':l.type==='entry'?'#999':'#444';
+    return '<div class="log-row"><span style="color:#444">'+ts+'</span><span style="color:'+c+';text-transform:uppercase;font-size:10px">'+l.type+'</span><span style="color:'+mc+'">'+l.message+'</span></div>';
+  }).join('');
+}
+
+function renderScalperTrades(trades, id) {
+  var el = document.getElementById(id); if(!el) return;
+  if(!trades||!trades.length){el.innerHTML='<div style="color:#444;font-size:12px;padding:10px 0">No trades yet</div>';return;}
+  el.innerHTML = trades.map(function(t){
+    var ts = new Date(t.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    var p = parseFloat(t.pnl)||0;
+    var badge = t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
+    var pstr = t.result==='open'?'<button onclick="closeTrade('+t.id+')" style="background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A;border-radius:5px;padding:2px 7px;font-size:10px;cursor:pointer">Close</button>':'<span style="color:'+(p>=0?'#1D9E75':'#E24B4A')+'">'+(p>=0?'+':'')+'$'+Math.abs(p).toFixed(2)+'</span>';
+    return '<div class="tr"><span style="color:#555">'+ts+'</span><span style="font-weight:600">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+'</div>';
+  }).join('');
+}
+
+function renderTrendPositions(positions, id) {
+  var el = document.getElementById(id); if(!el) return;
+  if(!positions||!positions.length){el.innerHTML='<div style="color:#444;font-size:12px;padding:10px 0">No open positions</div>';return;}
+  el.innerHTML = positions.map(function(p){
+    var entryP=parseFloat(p.entry_price)||0, targetP=parseFloat(p.target_price)||0, stopP=parseFloat(p.stop_price)||0;
+    var currOpt=parseFloat(p.currentOptionEst)||entryP;
+    var pnlNow=parseFloat(p.pnlNow)||0, pnlPct=parseFloat(p.pnlPct)||0;
+    var daysHeld=p.daysHeld||0;
+    var pnlColor=pnlNow>=0?'#1D9E75':'#E24B4A';
+    var range=targetP-stopP, progress=range>0?Math.min(100,Math.max(0,((currOpt-stopP)/range)*100)):0;
+    var progColor=progress>66?'#1D9E75':progress>33?'#BA7517':'#E24B4A';
+    return '<div class="pos-card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+          '<span style="font-weight:700;font-size:14px">'+p.ticker+'</span>'+
+          '<span style="font-size:11px;color:#666">'+p.direction+'</span>'+
+          '<span class="badge bo">Day '+daysHeld+'</span>'+
+        '</div>'+
+        '<div style="text-align:right">'+
+          '<span style="font-size:15px;font-weight:700;color:'+pnlColor+'">'+(pnlNow>=0?'+':'')+'$'+pnlNow+'</span>'+
+          '<span style="font-size:11px;color:'+pnlColor+';margin-left:4px">('+pnlPct+'%)</span>'+
+        '</div>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-bottom:6px">'+
+        '<span>Entry <span style="color:#aaa">$'+entryP.toFixed(2)+'</span></span>'+
+        '<span>Now <span style="color:#fff;font-weight:600">$'+currOpt.toFixed(2)+'</span></span>'+
+        '<span>Target <span style="color:#1D9E75">$'+targetP.toFixed(2)+'</span></span>'+
+      '</div>'+
+      '<div style="background:#1a1a1a;border-radius:4px;height:5px;overflow:hidden;margin-bottom:6px">'+
+        '<div style="background:'+progColor+';height:100%;width:'+progress.toFixed(0)+'%;transition:width 1s;border-radius:4px"></div>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#444">'+
+        '<span>Stop $'+stopP.toFixed(2)+'</span>'+
+        '<span>Stock $'+(p.currentStockPrice||'—')+'</span>'+
+        '<button onclick="closeTrendPosition('+p.id+','+pnlNow+')" style="background:'+(pnlNow>0?'#0a2e1f':'#1e0a0a')+';border:1px solid '+(pnlNow>0?'#1D9E75':'#E24B4A')+';color:'+(pnlNow>0?'#1D9E75':'#E24B4A')+';border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;font-weight:500">Close '+(pnlNow>=0?'+':'')+'$'+pnlNow+'</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+}
+
+// ── Engine toggle ─────────────────────────────────────────────────────────────
+function updateEngine(on) {
+  var dot=document.getElementById('ed'), tog=document.getElementById('etoggle'), el=document.getElementById('el');
+  if(dot) dot.className='dot '+(on?'don':'dof');
+  if(tog) tog.checked=on;
+  if(el) el.textContent=on?'Running':'Off';
+}
 updateEngine(D.engine.on);
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+var s=D.settings;
+var fieldDefaults={profitTarget:0.6,stopLoss:0.45,trailActivate:0.25,trailAmount:0.15,maxHoldMinutes:15,contracts:1,maxDailyTrades:5,maxDailyLosses:3};
+Object.keys(fieldDefaults).forEach(function(k){var el=document.getElementById(k);if(el)el.value=s[k]||fieldDefaults[k];});
+
+function saveSettings(){
+  var ns={};
+  Object.keys(fieldDefaults).forEach(function(k){var el=document.getElementById(k);if(el)ns[k]=k==='contracts'||k==='maxDailyTrades'||k==='maxDailyLosses'||k==='maxHoldMinutes'?parseInt(el.value):parseFloat(el.value);});
+  ns.dailyMax=s.dailyMax||100;ns.dailyProfitTarget=s.dailyProfitTarget||150;ns.maxPositions=s.maxPositions||2;ns.schedule=s.schedule||'1min';
+  fetch(BASE+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:ns,watchlist:['TSLA','NVDA']})})
+  .then(function(r){return r.json();}).then(function(){var m=document.getElementById('saveMsg');if(m){m.style.display='block';setTimeout(function(){m.style.display='none';},2000);}});
+}
 
 function toggleEngine(on){
   fetch(BASE+'/api/engine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on:on})})
   .then(function(r){return r.json();}).then(function(d){updateEngine(d.engineOn);});
 }
 
-// ── Status pills ─────────────────────────────────────────────────────────────
-var s=D.settings;
-document.getElementById('strades').textContent=(D.engine.todayTradeCount||0)+'/'+(s.maxDailyTrades||5)+' trades today';
-document.getElementById('slosses').textContent=(D.engine.todayLossCount||0)+'/'+(s.maxDailyLosses||3)+' losses';
-document.getElementById('sconsec').textContent=(D.engine.todayConsecLosses||0)+' consec';
-
-// ── Scalper stats ────────────────────────────────────────────────────────────
-var sp=parseFloat(D.scalper.pnl)||0;
-var spe=document.getElementById('spnl');spe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);spe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';
-var swr=parseFloat(D.scalper.wr)||0;
-var swe=document.getElementById('swr');swe.textContent=D.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';
-document.getElementById('str').textContent=D.scalper.trades;
-var stb=document.getElementById('stb');
-stb.innerHTML=D.scalper.recent.length?D.scalper.recent.map(function(t){
-  var ts=new Date(t.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  var pnl2=parseFloat(t.pnl)||0;
-  var badge=t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
-  var pstr=t.result==='open'?'<span style="color:#666">—</span>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(2)+'</span>';
-  var closeBtn=t.result==='open'?'<button onclick="closeTrade('+t.id+')" style="background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A;border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer">Close</button>':'';
-  return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+closeBtn+'</div>';
-}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet today</div>';
-
-// ── Settings form ────────────────────────────────────────────────────────────
-// Populate settings with current values
-var fields = {
-  profitTarget: s.profitTarget || 0.6,
-  stopLoss: s.stopLoss || 0.45,
-  trailActivate: s.trailActivate || 0.25,
-  trailAmount: s.trailAmount || 0.15,
-  maxHoldMinutes: s.maxHoldMinutes || 15,
-  contracts: s.contracts || 1,
-  maxDailyTrades: s.maxDailyTrades || 5,
-  maxDailyLosses: s.maxDailyLosses || 3
-};
-Object.keys(fields).forEach(function(k) {
-  var el = document.getElementById(k);
-  if (el) el.value = fields[k];
-});
-
-function saveSettings(){
-  var newS={
-    profitTarget:parseFloat(document.getElementById('profitTarget').value),
-    stopLoss:parseFloat(document.getElementById('stopLoss').value),
-    trailActivate:parseFloat(document.getElementById('trailActivate').value),
-    trailAmount:parseFloat(document.getElementById('trailAmount').value),
-    maxHoldMinutes:parseInt(document.getElementById('maxHoldMinutes').value),
-    contracts:parseInt(document.getElementById('contracts').value),
-    maxDailyTrades:parseInt(document.getElementById('maxDailyTrades').value),
-    maxDailyLosses:parseInt(document.getElementById('maxDailyLosses').value),
-    dailyMax:s.dailyMax||100,
-    dailyProfitTarget:s.dailyProfitTarget||150,
-    maxPositions:s.maxPositions||2,
-    schedule:s.schedule||'1min'
-  };
-  fetch(BASE+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:newS,watchlist:['TSLA','NVDA']})})
-  .then(function(r){return r.json();}).then(function(){
-    var msg=document.getElementById('saveMsg');msg.style.display='block';setTimeout(function(){msg.style.display='none';},2000);
-  });
-}
-
-// ── Trend stats ──────────────────────────────────────────────────────────────
-var tp=parseFloat(D.trend.pnl)||0;
-var tpe=document.getElementById('tpnl');tpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);tpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';
-var twr=parseFloat(D.trend.wr)||0;
-var twe=document.getElementById('twr');twe.textContent=D.trend.trades>0?twr.toFixed(1)+'%':'—';twe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';
-document.getElementById('ttr').textContent=D.trend.trades;
-var ttb=document.getElementById('ttb');
-ttb.innerHTML=D.trend.openPositions.length?D.trend.openPositions.map(function(p){
-  var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
-  return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span><span class="badge bo">Open</span><span style="color:#666;font-size:11px">'+(p.reason||'').slice(0,20)+'</span></div>';
-}).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm & 2pm ET</div>';
-
-// ── Force trend scan ─────────────────────────────────────────────────────────
-function forceTrendScan(){
-  fetch(BASE+'/trend/scan',{method:'POST'}).then(function(){alert('Trend scan triggered — refresh in 30 seconds to see results');});
-}
-
 function closeTrade(id){
-  if(!confirm('Mark this trade as closed with -$0.50 loss?')) return;
-  fetch(BASE+'/api/trades/'+id+'/close',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({pnl:-0.50})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){ alert('Trade closed successfully'); refreshDashboard(); }
-    else { alert('Error: ' + JSON.stringify(d)); }
-  });
+  if(!confirm('Mark this scalper trade as closed (-$0.50 loss)?')) return;
+  fetch(BASE+'/api/trades/'+id+'/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pnl:-0.50})})
+  .then(function(r){return r.json();}).then(function(d){if(d.ok)refreshDashboard();});
 }
 
-function closeTrendPosition(id, currentPnl) {
-  var pnlStr = currentPnl >= 0 ? '+$' + currentPnl : '-$' + Math.abs(currentPnl);
-  if(!confirm('Close this trend position now for ' + pnlStr + '?\n\nThis will record it as a ' + (currentPnl >= 0 ? 'WIN' : 'LOSS') + ' in your journal.')) return;
-  fetch(BASE+'/api/trend-positions/'+id+'/close',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({pnl: currentPnl})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){
-      alert('Position closed! ' + pnlStr + ' recorded as ' + d.result.toUpperCase());
-      refreshDashboard();
-    } else { alert('Error: ' + JSON.stringify(d)); }
-  });
+function closeTrendPosition(id,pnlNow){
+  var pstr=(pnlNow>=0?'+$':'-$')+Math.abs(pnlNow);
+  if(!confirm('Close trend position for '+pstr+'?\n\nThis records it as a '+(pnlNow>=0?'WIN':'LOSS')+'.')) return;
+  fetch(BASE+'/api/trend-positions/'+id+'/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pnl:pnlNow})})
+  .then(function(r){return r.json();}).then(function(d){if(d.ok){alert('Position closed! '+pstr);refreshDashboard();}});
 }
 
-// ── Activity logs ────────────────────────────────────────────────────────────
-var logColors = { trade:'#1D9E75', stop:'#E24B4A', entry:'#888', skip:'#555' };
-
-function renderLog(logs, containerId) {
-  var el = document.getElementById(containerId);
-  if (!el) return;
-  if (!logs || !logs.length) {
-    el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px">No activity yet</div>';
-    return;
-  }
-  el.innerHTML = logs.map(function(l) {
-    var ts = new Date(l.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-    var color = logColors[l.type] || '#666';
-    var msgColor = l.type === 'trade' ? '#1D9E75' : l.type === 'stop' ? '#E24B4A' : l.type === 'entry' ? '#aaa' : '#555';
-    return '<div style="display:grid;grid-template-columns:75px 45px 1fr;gap:6px;padding:3px 0;border-bottom:1px solid #1a1a1a;font-size:11px">' +
-      '<span style="color:#555">' + ts + '</span>' +
-      '<span style="color:' + color + ';text-transform:uppercase;font-size:10px">' + l.type + '</span>' +
-      '<span style="color:' + msgColor + '">' + l.message + '</span>' +
-      '</div>';
-  }).join('');
+function forceTrendScan(){
+  fetch(BASE+'/trend/scan',{method:'POST'}).then(function(){alert('Trend scan triggered — refresh in 30 seconds');});
 }
 
-renderLog(D.scalperLogs, 'scalper-log');
-renderLog(D.trendLogs, 'trend-log');
+// ── Full refresh ──────────────────────────────────────────────────────────────
+var refreshing=false;
+function refreshDashboard(){
+  if(refreshing) return; refreshing=true;
+  Promise.all([
+    fetch(BASE+'/api/combined-stats').then(function(r){return r.json();}),
+    fetch(BASE+'/api/combined-logs').then(function(r){return r.json();})
+  ]).then(function(results){
+    var d=results[0], logs=results[1];
 
-// ── Full dashboard auto-refresh every 30 seconds ────────────────────────────
-var refreshing = false;
-function refreshDashboard() {
-  if (refreshing) return;
-  refreshing = true;
-
-  // Refresh logs
-  fetch(BASE + '/api/combined-logs').then(function(r){return r.json();}).then(function(d){
-    if (d.scalperLogs) renderLog(d.scalperLogs, 'scalper-log');
-    if (d.trendLogs) renderLog(d.trendLogs, 'trend-log');
-  }).catch(function(){});
-
-  // Refresh all stats
-  fetch(BASE + '/api/combined-stats').then(function(r){return r.json();}).then(function(d){
     // Engine
     updateEngine(d.engine.on);
-    document.getElementById('strades').textContent=(d.engine.todayTradeCount||0)+'/'+(d.settings.maxDailyTrades||5)+' trades today';
+    document.getElementById('strades').textContent=(d.engine.todayTradeCount||0)+'/'+(d.settings.maxDailyTrades||5)+' trades';
     document.getElementById('slosses').textContent=(d.engine.todayLossCount||0)+'/'+(d.settings.maxDailyLosses||3)+' losses';
     document.getElementById('sconsec').textContent=(d.engine.todayConsecLosses||0)+' consec';
 
-    // Top metrics
-    var cp=parseFloat(d.totalPnl)||0;
-    var cpe=document.getElementById('cpnl');cpe.textContent=(cp>=0?'+':'')+'$'+Math.abs(cp).toFixed(2);cpe.className='mv '+(cp>0?'pos':cp<0?'neg':'neu');
+    // Overview metrics
+    pnlEl(d.totalPnl, document.getElementById('cpnl'));
     var td=(parseFloat(d.engine.dailyProfit)||0)-(parseFloat(d.engine.dailyLoss)||0);
     var tde=document.getElementById('ctd');tde.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);tde.className='mv '+(td>0?'pos':td<0?'neg':'neu');
-    document.getElementById('swl').textContent=d.scalper.wins+' / '+d.scalper.losses;
+    var swr=parseFloat(d.scalper.wr)||0;
+    var swe=document.getElementById('o-swr');if(swe){swe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.className='mv '+(swr>=50?'pos':swr>0?'neg':'neu');}
     document.getElementById('ctp').textContent=d.trend.openPositions.length+'/2';
 
-    // Scalper stats
+    // Overview scalper card
     var sp=parseFloat(d.scalper.pnl)||0;
-    var spe=document.getElementById('spnl');spe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);spe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';
-    var swr=parseFloat(d.scalper.wr)||0;
-    var swe=document.getElementById('swr');swe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';
-    document.getElementById('str').textContent=d.scalper.trades;
+    var ospe=document.getElementById('o-spnl');if(ospe){ospe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);ospe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';}
+    var oswe=document.getElementById('o-swr2');if(oswe){oswe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';oswe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';}
+    var ostre=document.getElementById('o-str');if(ostre)ostre.textContent=d.scalper.trades;
 
-    // Recent scalper trades
-    var stb=document.getElementById('stb');
-    stb.innerHTML=d.scalper.recent.length?d.scalper.recent.map(function(t){
-      var ts=new Date(t.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-      var pnl2=parseFloat(t.pnl)||0;
-      var badge=t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
-      var pstr=t.result==='open'?'<button onclick="closeTrade('+t.id+')" style="background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A;border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer">Close</button>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(2)+'</span>';
-      return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+'</div>';
-    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet today</div>';
-
-    // Trend stats
+    // Overview trend card
     var tp=parseFloat(d.trend.pnl)||0;
-    var tpe=document.getElementById('tpnl');tpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);tpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';
+    var otpe=document.getElementById('o-tpnl');if(otpe){otpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);otpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';}
     var twr=parseFloat(d.trend.wr)||0;
-    var twe=document.getElementById('twr');twe.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';twe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';
-    document.getElementById('ttr').textContent=d.trend.trades;
+    var otwe=document.getElementById('o-twr');if(otwe){otwe.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';otwe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';}
+    var otop=document.getElementById('o-top');if(otop)otop.textContent=d.trend.openPositions.length+'/2';
 
-    // Trend open positions
-    var ttb=document.getElementById('ttb');
-    ttb.innerHTML=d.trend.openPositions.length?d.trend.openPositions.map(function(p){
-      var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
-      var entryP=parseFloat(p.entry_price)||0;
-      var targetP=parseFloat(p.target_price)||0;
-      var stopP=parseFloat(p.stop_price)||0;
-      var currOpt=parseFloat(p.currentOptionEst)||entryP;
-      var pnlNow=parseFloat(p.pnlNow)||0;
-      var pnlPct=parseFloat(p.pnlPct)||0;
-      var daysHeld=p.daysHeld||0;
-      var pnlColor=pnlNow>=0?'#1D9E75':'#E24B4A';
-      // Progress bar: 0% = stop, 100% = target
-      var range=targetP-stopP;
-      var progress=range>0?Math.min(100,Math.max(0,((currOpt-stopP)/range)*100)):0;
-      var progressColor=progress>66?'#1D9E75':progress>33?'#BA7517':'#E24B4A';
-      return '<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;margin-bottom:8px">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-          '<div style="display:flex;align-items:center;gap:8px">' +
-            '<span style="font-weight:600;font-size:13px">'+p.ticker+'</span>' +
-            '<span style="font-size:11px;color:#888">'+p.direction+'</span>' +
-            '<span class="badge bo">Day '+daysHeld+'</span>' +
-          '</div>' +
-          '<div style="text-align:right">' +
-            '<span style="font-size:14px;font-weight:600;color:'+pnlColor+'">'+(pnlNow>=0?'+':'')+'$'+pnlNow+'</span>' +
-            '<span style="font-size:11px;color:'+pnlColor+';margin-left:4px">('+pnlPct+'%)</span>' +
-          '</div>' +
-        '</div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:6px">' +
-          '<span>Entry <span style="color:#aaa">$'+entryP.toFixed(2)+'</span></span>' +
-          '<span>Now <span style="color:#fff;font-weight:500">$'+currOpt.toFixed(2)+'</span></span>' +
-          '<span>Target <span style="color:#1D9E75">$'+targetP.toFixed(2)+'</span></span>' +
-        '</div>' +
-        '<div style="background:#222;border-radius:4px;height:6px;overflow:hidden">' +
-          '<div style="background:'+progressColor+';height:100%;width:'+progress.toFixed(0)+'%;transition:width 0.5s;border-radius:4px"></div>' +
-        '</div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;margin-top:6px">' +
-          '<span>Stop $'+stopP.toFixed(2)+'</span>' +
-          '<span>Stock: $'+(p.currentStockPrice||'—')+'</span>' +
-          '<button onclick="closeTrendPosition('+p.id+','+pnlNow+')" style="background:'+(pnlNow>0?'#0a2e1f':'#2e0a0a')+';border:1px solid '+(pnlNow>0?'#1D9E75':'#E24B4A')+';color:'+(pnlNow>0?'#1D9E75':'#E24B4A')+';border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;font-weight:500">Close '+(pnlNow>=0?'+':'')+'$'+pnlNow+'</button>' +
-        '</div>' +
-      '</div>';
-    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm, 2pm & 3:30pm ET</div>';
+    // Scalper view metrics
+    var spe=document.getElementById('spnl');if(spe){spe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);spe.className='mv '+(sp>0?'pos':sp<0?'neg':'neu');}
+    var swre=document.getElementById('swr');if(swre){swre.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swre.className='mv '+(swr>=50?'pos':swr>0?'neg':'neu');}
+    var std=document.getElementById('s-today');if(std){std.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);std.className='mv '+(td>0?'pos':td<0?'neg':'neu');}
+    var stre=document.getElementById('str');if(stre)stre.textContent=d.scalper.trades;
 
-    // Update last refresh time
+    // Trend view metrics
+    var tpe=document.getElementById('tpnl');if(tpe){tpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);tpe.className='mv '+(tp>0?'pos':tp<0?'neg':'neu');}
+    var twre=document.getElementById('twr');if(twre){twre.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';twre.className='mv '+(twr>=50?'pos':twr>0?'neg':'neu');}
+    var twle=document.getElementById('twl');if(twle)twle.textContent=d.trend.wins+' / '+d.trend.losses;
+    var tope=document.getElementById('top');if(tope)tope.textContent=d.trend.openPositions.length+'/2';
+
+    // Trades & positions
+    renderScalperTrades(d.scalper.recent, 'stb');
+    renderScalperTrades(d.scalper.recent, 'o-stb');
+    renderTrendPositions(d.trend.openPositions, 'ttb');
+    renderTrendPositions(d.trend.openPositions, 'o-ttb');
+
+    // Logs
+    if(logs.scalperLogs) renderLog(logs.scalperLogs, 'scalper-log');
+    if(logs.trendLogs) renderLog(logs.trendLogs, 'trend-log');
+
     document.getElementById('lu').textContent='Updated '+new Date().toLocaleTimeString();
-  }).catch(function(){}).finally(function(){ refreshing = false; });
+  }).catch(function(e){console.error(e);}).finally(function(){refreshing=false;});
 }
 
-// Run immediately then every 30 seconds
-refreshDashboard();
-setInterval(refreshDashboard, 30000);
+// Countdown
+var secs=30;
+setInterval(function(){secs--;if(secs<=0)secs=30;var e=document.getElementById('countdown');if(e)e.textContent=secs+'s';},1000);
 
-// Countdown timer
-var countdownSecs = 30;
-setInterval(function() {
-  countdownSecs--;
-  if (countdownSecs <= 0) countdownSecs = 30;
-  var el = document.getElementById('countdown');
-  if (el) el.textContent = 'refresh in ' + countdownSecs + 's';
-}, 1000);
-<\/script></body></html>`);
+// Initial render from server data
+renderLog(D.scalperLogs,'scalper-log');
+renderLog(D.trendLogs,'trend-log');
+renderScalperTrades(D.scalper.recent,'stb');
+renderScalperTrades(D.scalper.recent,'o-stb');
+renderTrendPositions(D.trend.openPositions,'ttb');
+renderTrendPositions(D.trend.openPositions,'o-ttb');
+refreshDashboard();
+setInterval(refreshDashboard,30000);
+<\/script>
+</body>
+</html>`);
   } catch(e) { res.status(500).send('Combined dashboard error: ' + e.message); }
 });
 
