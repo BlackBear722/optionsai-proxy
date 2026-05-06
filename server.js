@@ -1792,6 +1792,46 @@ app.get('/api/combined-logs', async function(req, res) {
     res.json({ scalperLogs: sl.rows, trendLogs: tl.rows });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+
+// Combined stats endpoint — all live data for dashboard auto-refresh
+app.get('/api/combined-stats', async function(req, res) {
+  try {
+    var scalperTrades = await pool.query('SELECT * FROM trades ORDER BY ts DESC');
+    var closed = scalperTrades.rows.filter(function(t){return t.result==='win'||t.result==='loss';});
+    var scalperWins = closed.filter(function(t){return t.result==='win';});
+    var scalperPnl = closed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var scalperWr = closed.length ? (scalperWins.length/closed.length*100).toFixed(1) : '0';
+    var recentScalper = scalperTrades.rows.slice(0,6);
+
+    var trendTrades = await pool.query('SELECT * FROM trend_positions ORDER BY entered_at DESC');
+    var trendClosed = trendTrades.rows.filter(function(t){return t.status==='win'||t.status==='loss';});
+    var trendWins = trendClosed.filter(function(t){return t.status==='win';});
+    var trendPnl = trendClosed.reduce(function(s,t){return s+(parseFloat(t.pnl)||0);},0);
+    var trendWr = trendClosed.length ? (trendWins.length/trendClosed.length*100).toFixed(1) : '0';
+    var trendOpenPos = trendTrades.rows.filter(function(t){return t.status==='open';});
+
+    var engineOn = await getState('engineOn', false);
+    var dailyProfit = await getState('dailyProfit', 0);
+    var dailyLoss = await getState('dailyLoss', 0);
+    var settings = await getState('settings', {});
+    var todayLossCount = 0, todayConsecLosses = 0, todayTradeCount = 0;
+    try {
+      var tlRows = await pool.query("SELECT result FROM trades WHERE result != 'open' AND ts::date = CURRENT_DATE ORDER BY ts ASC");
+      var tlTrades = tlRows.rows;
+      todayTradeCount = tlTrades.length;
+      todayLossCount = tlTrades.filter(function(t){return t.result==='loss';}).length;
+      for (var tci = tlTrades.length-1; tci >= 0; tci--) { if (tlTrades[tci].result==='loss') todayConsecLosses++; else break; }
+    } catch(e) {}
+
+    res.json({
+      scalper: { pnl: scalperPnl.toFixed(2), wr: scalperWr, wins: scalperWins.length, losses: closed.length - scalperWins.length, recent: recentScalper, trades: closed.length },
+      trend: { pnl: trendPnl.toFixed(2), wr: trendWr, wins: trendWins.length, losses: trendClosed.length - trendWins.length, openPositions: trendOpenPos, trades: trendClosed.length },
+      engine: { on: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss, todayLossCount: todayLossCount, todayConsecLosses: todayConsecLosses, todayTradeCount: todayTradeCount },
+      settings: settings,
+      totalPnl: (scalperPnl + trendPnl).toFixed(2)
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/resetcircuitbreaker', async function(req, res) {
   await setState('lastOrderRejected', false);
   await addLog('entry', '✅ Circuit breaker manually reset — orders re-enabled');
@@ -2587,8 +2627,15 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 
 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
   <div><h1>OptionsAI</h1><div class="sub">Scalping bot + trend following bot</div></div>
-  <button class="btn" onclick="location.reload()">Refresh</button>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="lu" style="font-size:11px;color:#555">Loading...</span>
+    <span style="font-size:11px;color:#555" id="countdown"></span>
+    <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;display:inline-block;animation:pulse 2s infinite"></span>
+  </div>
 </div>
+<style>
+@keyframes pulse{0%{opacity:1}50%{opacity:0.3}100%{opacity:1}}
+</style>
 
 <div class="g4">
   <div class="metric"><div class="ml">Combined P&L</div><div class="mv" id="cpnl">—</div></div>
@@ -2830,13 +2877,86 @@ function renderLog(logs, containerId) {
 renderLog(D.scalperLogs, 'scalper-log');
 renderLog(D.trendLogs, 'trend-log');
 
-// Auto-refresh logs every 30 seconds
-setInterval(function() {
+// ── Full dashboard auto-refresh every 30 seconds ────────────────────────────
+var refreshing = false;
+function refreshDashboard() {
+  if (refreshing) return;
+  refreshing = true;
+
+  // Refresh logs
   fetch(BASE + '/api/combined-logs').then(function(r){return r.json();}).then(function(d){
     if (d.scalperLogs) renderLog(d.scalperLogs, 'scalper-log');
     if (d.trendLogs) renderLog(d.trendLogs, 'trend-log');
   }).catch(function(){});
-}, 30000);
+
+  // Refresh all stats
+  fetch(BASE + '/api/combined-stats').then(function(r){return r.json();}).then(function(d){
+    // Engine
+    updateEngine(d.engine.on);
+    document.getElementById('strades').textContent=(d.engine.todayTradeCount||0)+'/'+(d.settings.maxDailyTrades||5)+' trades today';
+    document.getElementById('slosses').textContent=(d.engine.todayLossCount||0)+'/'+(d.settings.maxDailyLosses||3)+' losses';
+    document.getElementById('sconsec').textContent=(d.engine.todayConsecLosses||0)+' consec';
+
+    // Top metrics
+    var cp=parseFloat(d.totalPnl)||0;
+    var cpe=document.getElementById('cpnl');cpe.textContent=(cp>=0?'+':'')+'$'+Math.abs(cp).toFixed(2);cpe.className='mv '+(cp>0?'pos':cp<0?'neg':'neu');
+    var td=(parseFloat(d.engine.dailyProfit)||0)-(parseFloat(d.engine.dailyLoss)||0);
+    var tde=document.getElementById('ctd');tde.textContent=(td>=0?'+':'')+'$'+Math.abs(td).toFixed(2);tde.className='mv '+(td>0?'pos':td<0?'neg':'neu');
+    document.getElementById('swl').textContent=d.scalper.wins+' / '+d.scalper.losses;
+    document.getElementById('ctp').textContent=d.trend.openPositions.length+'/2';
+
+    // Scalper stats
+    var sp=parseFloat(d.scalper.pnl)||0;
+    var spe=document.getElementById('spnl');spe.textContent=(sp>=0?'+':'')+'$'+Math.abs(sp).toFixed(2);spe.style.color=sp>0?'#1D9E75':sp<0?'#E24B4A':'#fff';
+    var swr=parseFloat(d.scalper.wr)||0;
+    var swe=document.getElementById('swr');swe.textContent=d.scalper.trades>0?swr.toFixed(1)+'%':'—';swe.style.color=swr>=50?'#1D9E75':swr>0?'#E24B4A':'#fff';
+    document.getElementById('str').textContent=d.scalper.trades;
+
+    // Recent scalper trades
+    var stb=document.getElementById('stb');
+    stb.innerHTML=d.scalper.recent.length?d.scalper.recent.map(function(t){
+      var ts=new Date(t.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      var pnl2=parseFloat(t.pnl)||0;
+      var badge=t.result==='open'?'<span class="badge bo">Open</span>':t.result==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
+      var pstr=t.result==='open'?'<button onclick="closeTrade('+t.id+')" style="background:#2e0a0a;border:1px solid #E24B4A;color:#E24B4A;border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer">Close</button>':'<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+'">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(2)+'</span>';
+      return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+(t.ticker||'—')+'</span><span>'+(t.type||'—')+'</span>'+badge+pstr+'</div>';
+    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No trades yet today</div>';
+
+    // Trend stats
+    var tp=parseFloat(d.trend.pnl)||0;
+    var tpe=document.getElementById('tpnl');tpe.textContent=(tp>=0?'+':'')+'$'+Math.abs(tp).toFixed(2);tpe.style.color=tp>0?'#1D9E75':tp<0?'#E24B4A':'#fff';
+    var twr=parseFloat(d.trend.wr)||0;
+    var twe=document.getElementById('twr');twe.textContent=d.trend.trades>0?twr.toFixed(1)+'%':'—';twe.style.color=twr>=50?'#1D9E75':twr>0?'#E24B4A':'#fff';
+    document.getElementById('ttr').textContent=d.trend.trades;
+
+    // Trend open positions
+    var ttb=document.getElementById('ttb');
+    ttb.innerHTML=d.trend.openPositions.length?d.trend.openPositions.map(function(p){
+      var ts=new Date(p.entered_at).toLocaleDateString([],{month:'short',day:'numeric'});
+      var daysHeld=Math.floor((Date.now()-new Date(p.entered_at))/(1000*60*60*24));
+      var entryP=parseFloat(p.entry_price)||0;
+      var targetP=parseFloat(p.target_price)||0;
+      var stopP=parseFloat(p.stop_price)||0;
+      return'<div class="tr"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span><span class="badge bo">Open</span><span style="color:#888;font-size:10px">$'+entryP.toFixed(2)+'→$'+targetP.toFixed(2)+'</span></div>';
+    }).join(''):'<div style="color:#555;font-size:12px;padding:10px 0">No open positions — scans at 10am, 12pm & 2pm ET</div>';
+
+    // Update last refresh time
+    document.getElementById('lu').textContent='Updated '+new Date().toLocaleTimeString();
+  }).catch(function(){}).finally(function(){ refreshing = false; });
+}
+
+// Run immediately then every 30 seconds
+refreshDashboard();
+setInterval(refreshDashboard, 30000);
+
+// Countdown timer
+var countdownSecs = 30;
+setInterval(function() {
+  countdownSecs--;
+  if (countdownSecs <= 0) countdownSecs = 30;
+  var el = document.getElementById('countdown');
+  if (el) el.textContent = 'refresh in ' + countdownSecs + 's';
+}, 1000);
 <\/script></body></html>`);
   } catch(e) { res.status(500).send('Combined dashboard error: ' + e.message); }
 });
