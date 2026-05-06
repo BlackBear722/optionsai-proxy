@@ -1783,6 +1783,15 @@ app.post('/api/trades/:id/close', async function(req, res) {
 });
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
+
+// Combined logs endpoint for auto-refresh
+app.get('/api/combined-logs', async function(req, res) {
+  try {
+    var sl = await pool.query('SELECT ts, type, message FROM scan_log ORDER BY ts DESC LIMIT 80');
+    var tl = await pool.query('SELECT ts, type, message FROM trend_logs ORDER BY ts DESC LIMIT 40');
+    res.json({ scalperLogs: sl.rows, trendLogs: tl.rows });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/resetcircuitbreaker', async function(req, res) {
   await setState('lastOrderRejected', false);
   await addLog('entry', '✅ Circuit breaker manually reset — orders re-enabled');
@@ -2443,13 +2452,29 @@ app.get('/combined', async function(req, res) {
       todayTradeCount = parseInt(ttRows.rows[0].count) || 0;
     } catch(e) {}
 
+    // Scalper activity logs (last 80)
+    var scalperLogs = [];
+    try {
+      var slRows = await pool.query('SELECT ts, type, message FROM scan_log ORDER BY ts DESC LIMIT 80');
+      scalperLogs = slRows.rows;
+    } catch(e) {}
+
+    // Trend activity logs (last 40)
+    var trendLogs = [];
+    try {
+      var tlRows2 = await pool.query('SELECT ts, type, message FROM trend_logs ORDER BY ts DESC LIMIT 40');
+      trendLogs = tlRows2.rows;
+    } catch(e) {}
+
     var combined = {
       scalper: { pnl: scalperPnl.toFixed(2), wr: scalperWr, wins: scalperWins.length, losses: scalperLosses.length, recent: recentScalper, trades: closed.length },
       trend: { pnl: trendPnl.toFixed(2), wr: trendWr, wins: trendWins.length, losses: trendClosed.length, openPositions: trendOpenPos, trades: trendClosed.length },
       engine: { on: engineOn, dailyProfit: dailyProfit, dailyLoss: dailyLoss, killSwitch: killSwitch, todayLossCount: todayLossCount, todayConsecLosses: todayConsecLosses, todayTradeCount: todayTradeCount },
       settings: settings,
       hasSession: !!session,
-      totalPnl: (scalperPnl + trendPnl).toFixed(2)
+      totalPnl: (scalperPnl + trendPnl).toFixed(2),
+      scalperLogs: scalperLogs,
+      trendLogs: trendLogs
     };
 
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>OptionsAI</title>
@@ -2582,11 +2607,27 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         <a href="/dashboard" class="btn" style="text-align:center">📊 Scalper Full Dashboard</a>
         <a href="/trend/dashboard" class="btn" style="text-align:center">📈 Trend Full Dashboard</a>
         <a href="/api/journal" class="btn" style="text-align:center">📋 Journal (JSON)</a>
-        <a href="/api/logs" class="btn" style="text-align:center">🔍 Recent Logs</a>
       </div>
     </div>
   </div>
 
+</div>
+
+<div class="g2" style="margin-top:4px">
+  <div class="card-full">
+    <div class="ch" style="margin-bottom:10px">
+      <span>⚡ Scalper Activity Log</span>
+      <span style="font-size:11px;color:#666;font-weight:400">live · refreshes every 30s</span>
+    </div>
+    <div id="scalper-log" style="max-height:340px;overflow-y:auto"></div>
+  </div>
+  <div class="card-full">
+    <div class="ch" style="margin-bottom:10px">
+      <span>📈 Trend Bot Log</span>
+      <span style="font-size:11px;color:#666;font-weight:400">live · refreshes every 30s</span>
+    </div>
+    <div id="trend-log" style="max-height:340px;overflow-y:auto"></div>
+  </div>
 </div>
 
 <script>
@@ -2701,6 +2742,39 @@ function closeTrade(id){
     else { alert('Error: ' + JSON.stringify(d)); }
   });
 }
+
+// ── Activity logs ────────────────────────────────────────────────────────────
+var logColors = { trade:'#1D9E75', stop:'#E24B4A', entry:'#888', skip:'#555' };
+
+function renderLog(logs, containerId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  if (!logs || !logs.length) {
+    el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px">No activity yet</div>';
+    return;
+  }
+  el.innerHTML = logs.map(function(l) {
+    var ts = new Date(l.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    var color = logColors[l.type] || '#666';
+    var msgColor = l.type === 'trade' ? '#1D9E75' : l.type === 'stop' ? '#E24B4A' : l.type === 'entry' ? '#aaa' : '#555';
+    return '<div style="display:grid;grid-template-columns:75px 45px 1fr;gap:6px;padding:3px 0;border-bottom:1px solid #1a1a1a;font-size:11px">' +
+      '<span style="color:#555">' + ts + '</span>' +
+      '<span style="color:' + color + ';text-transform:uppercase;font-size:10px">' + l.type + '</span>' +
+      '<span style="color:' + msgColor + '">' + l.message + '</span>' +
+      '</div>';
+  }).join('');
+}
+
+renderLog(D.scalperLogs, 'scalper-log');
+renderLog(D.trendLogs, 'trend-log');
+
+// Auto-refresh logs every 30 seconds
+setInterval(function() {
+  fetch(BASE + '/api/combined-logs').then(function(r){return r.json();}).then(function(d){
+    if (d.scalperLogs) renderLog(d.scalperLogs, 'scalper-log');
+    if (d.trendLogs) renderLog(d.trendLogs, 'trend-log');
+  }).catch(function(){});
+}, 30000);
 <\/script></body></html>`);
   } catch(e) { res.status(500).send('Combined dashboard error: ' + e.message); }
 });
