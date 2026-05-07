@@ -2496,6 +2496,8 @@ async function runTrendScanLogic() {
     if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat — no clear MA direction'); continue; }
     // Wider RSI range for trend following — elevated RSI in uptrend = momentum, not overbought
     if (d2.rsi > 80 || d2.rsi < 20) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme for trend'); continue; }
+    // Neutral zone block — RSI 48-52 has no directional edge, same as scalper
+    if (d2.rsi >= 48 && d2.rsi <= 52) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' in neutral zone (48-52) — no edge'); continue; }
     // SPY alignment is informational only — don't block trades that conflict with SPY
     // Best trend trades often happen in stocks moving independently of the market
     if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' no clear trend direction'); continue; }
