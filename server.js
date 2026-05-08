@@ -1784,6 +1784,21 @@ app.post('/api/trades/:id/close', async function(req, res) {
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
 
+// All trend positions — last 5 days
+app.get('/api/trend-positions', async function(req, res) {
+  try {
+    var positions = await pool.query(
+      "SELECT * FROM trend_positions WHERE entered_at > NOW() - INTERVAL '5 days' ORDER BY entered_at DESC"
+    );
+    var stats = await pool.query(
+      "SELECT COUNT(*) FILTER (WHERE status='win') as wins, COUNT(*) FILTER (WHERE status='loss') as losses, " +
+      "COALESCE(SUM(pnl) FILTER (WHERE status IN ('win','loss')),0) as total_pnl, " +
+      "COUNT(*) FILTER (WHERE status='open') as open_pos FROM trend_positions WHERE entered_at > NOW() - INTERVAL '5 days'"
+    );
+    res.json({ positions: positions.rows, stats: stats.rows[0] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Close a trend position manually — capitalize on current profit
 app.post('/api/trend-positions/:id/close', async function(req, res) {
   try {
