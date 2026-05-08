@@ -1784,6 +1784,19 @@ app.post('/api/trades/:id/close', async function(req, res) {
 
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
 
+// Bulk close all phantom open trades (MXL, ARM etc stuck as open)
+app.post('/api/bulk-close-phantoms', async function(req, res) {
+  try {
+    // Close all trades that are still 'open' but older than 2 days
+    var result = await pool.query(
+      "UPDATE trades SET result='loss', pnl=-0.50 WHERE result='open' AND ts < NOW() - INTERVAL '2 days' RETURNING id, ticker"
+    );
+    var closed = result.rows;
+    console.log('Bulk closed ' + closed.length + ' phantom trades');
+    res.json({ ok: true, closed: closed.length, tickers: closed.map(function(r){ return r.ticker; }) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // All trend positions — last 5 days
 app.get('/api/trend-positions', async function(req, res) {
   try {
@@ -2249,9 +2262,10 @@ async function buildTrendWatchlist() {
   if (trendWatchCache.date === todayStr && trendWatchCache.tickers.length > 0) return trendWatchCache.tickers;
 
   // Broad universe of trending-friendly stocks across sectors
+  // AAPL removed from trend watchlist — 2 same-day losses, options too expensive/tight
   var anchors = [
     // Mega-cap tech
-    'NVDA', 'TSLA', 'META', 'MSFT', 'AAPL', 'AMD', 'GOOGL', 'AMZN',
+    'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN',
     // High-momentum / crypto-adjacent
     'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI', 'HOOD', 'MARA', 'RIOT',
     // Semis & infrastructure
@@ -2510,8 +2524,9 @@ async function runTrendScanLogic() {
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
     if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat — no clear MA direction'); continue; }
     // Wider RSI range for trend following — elevated RSI in uptrend = momentum, not overbought
-    if (d2.rsi > 80 || d2.rsi < 20) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme for trend'); continue; }
-    // Neutral zone block — RSI 48-52 has no directional edge, same as scalper
+    // RSI filter: 40-65 for trend entries — avoid extended moves and neutral zone
+    if (d2.rsi > 65) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' too extended (>65) — wait for pullback'); continue; }
+    if (d2.rsi < 20) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme oversold (<20)'); continue; }
     if (d2.rsi >= 48 && d2.rsi <= 52) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' in neutral zone (48-52) — no edge'); continue; }
     // SPY alignment is informational only — don't block trades that conflict with SPY
     // Best trend trades often happen in stocks moving independently of the market
@@ -2519,6 +2534,12 @@ async function runTrendScanLogic() {
     // Weekly trend confirmation — skip if weekly contradicts daily
     if (d2.weeklyTrend !== 'UNKNOWN' && d2.weeklyTrend !== 'FLAT' && d2.weeklyTrend !== d2.trend) {
       await trendLog('skip', ticker + ' daily:' + d2.trend + ' conflicts weekly:' + d2.weeklyTrend + ' — skipping');
+      continue;
+    }
+    // Fix 3: Require price within 8% of 20MA — avoid chasing extended moves
+    var distFromMa = parseFloat(d2.distFromMa20Pct) || 0;
+    if (Math.abs(distFromMa) > 8) {
+      await trendLog('skip', ticker + ' price ' + distFromMa.toFixed(1) + '% from 20MA — too extended, wait for pullback');
       continue;
     }
 
@@ -2593,9 +2614,9 @@ async function runTrendScan() {
       return;
     }
     // Scan 4: 3:30pm ET — last window before close
-    if (hour === 15 && min === 30 && !w.s4) {
+    if (hour === 15 && min === 0 && !w.s4) {
       w.s4 = true;
-      await trendLog('entry', '⏰ Trend scan 4/4 — 3:30pm ET');
+      await trendLog('entry', '⏰ Trend scan 4/4 — 3:00pm ET');
       await runTrendScanLogic();
       return;
     }
