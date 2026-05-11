@@ -2182,20 +2182,26 @@ async function trendLog(type, message) {
   try { await pool.query('INSERT INTO trend_logs (type,message) VALUES ($1,$2)', [type, message]); } catch(e) {}
 }
 
-var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts to find multi-week momentum trades.\n\nTREND RULES:\n- UPTREND: Price above 20-day MA AND week change positive. Bonus if 20MA also above 50MA.\n- DOWNTREND: Price below 20-day MA AND week change negative. Bonus if 20MA below 50MA.\n- FLAT: Price chopping around 20MA with no clear weekly direction — do NOT trade.\n\nENTRY RULES:\n- BUY_CALL: Uptrend confirmed, RSI 40-75 (elevated RSI in uptrend = momentum, NOT overbought), price holding above 20MA or breaking out of consolidation, volume confirming.\n- BUY_PUT: Downtrend confirmed, RSI 25-60, price rejected at 20MA or breaking down from consolidation, volume confirming.\n- IDEAL entries: pullback to 20MA in uptrend (RSI 40-55), OR breakout continuation (RSI 55-70).\n- SPY direction is context only — strong individual stock trends can go against the market.\n- NEVER enter RSI above 80 (extreme overbought) or below 20 (extreme oversold).\n\nOPTION SELECTION:\n- Expiry: 30-40 days out (enough time for trend to play out).\n- Strike: ATM or 1 strike in the money.\n- Premium: $1.50-$5.00 per contract.\n\nPROFIT TARGET: $200 per contract. STOP LOSS: 40% of premium paid.\n\nHIGH confidence: trend clearly established, clean entry point (pullback or breakout), RSI confirms direction.\nNONE: trend unclear, RSI extreme, no clear entry trigger, or stock just had huge move without consolidation.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL","confidence":"HIGH","strike":200,"expiry":"2026-06-06","premium":3.50,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
+var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts to find multi-week momentum trades. You use VERTICAL SPREADS to reduce cost and risk.\n\nTREND RULES:\n- UPTREND: Price above 20-day MA AND week change positive. Bonus if 20MA also above 50MA.\n- DOWNTREND: Price below 20-day MA AND week change negative. Bonus if 20MA below 50MA.\n- FLAT: Price chopping around 20MA with no clear weekly direction — do NOT trade.\n\nENTRY RULES:\n- BUY_CALL_SPREAD: Uptrend confirmed, RSI 40-65, price near or pulling back to 20MA.\n- BUY_PUT_SPREAD: Downtrend confirmed, RSI 35-60, price rejected at or below 20MA.\n- IDEAL entries: pullback to 20MA in uptrend (RSI 40-55), OR early breakout continuation (RSI 55-65).\n- SPY direction is context only.\n- NEVER enter RSI above 65 (too extended) or below 20 (extreme oversold).\n\nSPREAD CONSTRUCTION:\n- BUY_CALL_SPREAD: Buy ATM call + Sell call 5-10 points higher. Net cost $1.50-$2.50.\n- BUY_PUT_SPREAD: Buy ATM put + Sell put 5-10 points lower. Net cost $1.50-$2.50.\n- Expiry: 30-40 days out.\n- Max net premium: $2.50 per spread.\n- The short strike should be at a realistic target price for the trend move.\n\nEXAMPLE — Stock at $215, uptrend:\n  Buy $215 call for $3.75, Sell $225 call for $2.00 = net $1.75 cost\n  Max profit = ($225-$215-$1.75) x 100 = $825 if stock reaches $225\n  Max loss = $1.75 x 100 = $175\n\nPROFIT TARGET: 80% of max spread width (e.g. $8 wide spread targets $640). STOP LOSS: 50% of net premium paid.\n\nHIGH confidence: trend clearly established, clean pullback entry near 20MA, RSI confirms direction.\nNONE: trend unclear, RSI extreme, price too extended from 20MA, or stock just had huge move.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL_SPREAD","confidence":"HIGH","long_strike":200,"short_strike":210,"expiry":"2026-06-06","net_premium":1.75,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
 
 async function callTrendClaude(msg) {
   try {
     var r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, system: TREND_SYSTEM, messages: [{ role: 'user', content: msg }] })
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, system: TREND_SYSTEM, messages: [{ role: 'user', content: msg }] })
     });
     var data = await r.json();
     var text = (data.content || []).map(function(b) { return b.text || ''; }).join('');
     var match = text.match(/<TREND_RESULT>([\s\S]*?)<\/TREND_RESULT>/);
     if (!match) return null;
-    return JSON.parse(match[1]);
+    var result = JSON.parse(match[1]);
+    // Normalize signal names — support both old (BUY_CALL) and new (BUY_CALL_SPREAD) formats
+    if (result.signal === 'BUY_CALL') result.signal = 'BUY_CALL_SPREAD';
+    if (result.signal === 'BUY_PUT') result.signal = 'BUY_PUT_SPREAD';
+    // Normalize premium field — use net_premium if present
+    if (result.net_premium) result.premium = result.net_premium;
+    return result;
   } catch(e) { console.error('Trend Claude error:', e.message); return null; }
 }
 
@@ -2349,12 +2355,26 @@ async function gapProtectionCheck() {
         if (!currentStockPrice) continue;
 
         var entryPrice = parseFloat(pos.entry_price) || 0;
-        var entryStrike = parseFloat(pos.strike) || currentStockPrice;
-        var stockMove = currentStockPrice - entryStrike;
-        var pctMove = entryStrike > 0 ? ((currentStockPrice - entryStrike) / entryStrike) : 0;
-        var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
-        if (pos.direction === 'PUT') delta = -delta;
-        var estimatedOptionPrice = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
+        // Handle spread positions — strike stored as "200/210"
+        var isSpread = pos.direction === 'CALL_SPREAD' || pos.direction === 'PUT_SPREAD';
+        var isPut2 = pos.direction === 'PUT' || pos.direction === 'PUT_SPREAD';
+        var strikeParts = String(pos.strike).split('/');
+        var longStrike2 = parseFloat(strikeParts[0]) || currentStockPrice;
+        var shortStrike2 = strikeParts[1] ? parseFloat(strikeParts[1]) : null;
+        var spreadWidth2 = shortStrike2 ? Math.abs(shortStrike2 - longStrike2) : 0;
+        var stockMove = currentStockPrice - longStrike2;
+        var pctMove = longStrike2 > 0 ? ((currentStockPrice - longStrike2) / longStrike2) : 0;
+        // Spread delta is lower than single option — net delta ~0.3 for ATM spread
+        var delta = isSpread
+          ? (pctMove > 0.03 ? 0.40 : pctMove < -0.03 ? 0.20 : 0.30)
+          : (pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50);
+        if (isPut2) delta = -delta;
+        // Cap spread value at spread width
+        var estimatedOptionPrice = entryPrice + (stockMove * Math.abs(delta));
+        if (isSpread && spreadWidth2 > 0) {
+          estimatedOptionPrice = Math.min(estimatedOptionPrice, spreadWidth2 - 0.05); // cap at max spread value
+        }
+        estimatedOptionPrice = Math.max(0.01, estimatedOptionPrice);
         var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100 * (pos.contracts || 1);
         var hardStop = entryPrice * 0.60;
 
@@ -2577,14 +2597,29 @@ async function runTrendScanLogic() {
     if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
     await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
     if (result2.confidence === 'HIGH') {
-      var targetPrice = result2.premium + 2.00;
-      var stopPrice2 = result2.premium * 0.60;
+      var isCall = result2.signal === 'BUY_CALL_SPREAD' || result2.signal === 'BUY_CALL';
+      var isPut = result2.signal === 'BUY_PUT_SPREAD' || result2.signal === 'BUY_PUT';
+      var direction = isCall ? 'CALL_SPREAD' : 'PUT_SPREAD';
+      var netPremium = parseFloat(result2.net_premium || result2.premium) || 2.00;
+      var longStrike = result2.long_strike || result2.strike;
+      var shortStrike = result2.short_strike || (isCall ? longStrike + 5 : longStrike - 5);
+      var spreadWidth = Math.abs(shortStrike - longStrike);
+      // Target: 80% of max spread value | Stop: 50% of net premium
+      var maxSpreadValue = spreadWidth - netPremium;
+      var targetPrice = netPremium + (maxSpreadValue * 0.80);
+      var stopPrice2 = netPremium * 0.50;
+      var strikeStr = longStrike + '/' + shortStrike;
       await pool.query(
         'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-        [ticker, result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT', result2.strike, result2.expiry || expiry,
-         result2.premium, 1, 'PAPER-' + Date.now(), result2.premium, targetPrice.toFixed(2), stopPrice2.toFixed(2), result2.reason]
+        [ticker, direction, strikeStr, result2.expiry || expiry,
+         netPremium, 1, 'PAPER-' + Date.now(), netPremium, targetPrice.toFixed(2), stopPrice2.toFixed(2), result2.reason]
       );
-      await trendLog('trade', 'OPENED: ' + ticker + ' ' + (result2.signal === 'BUY_CALL' ? 'CALL' : 'PUT') + ' entry=$' + result2.premium + ' target=$' + targetPrice.toFixed(2) + ' stop=$' + stopPrice2.toFixed(2));
+      await trendLog('trade', 'OPENED SPREAD: ' + ticker + ' ' + direction +
+        ' $' + longStrike + '/$' + shortStrike +
+        ' net=$' + netPremium +
+        ' target=$' + targetPrice.toFixed(2) +
+        ' stop=$' + stopPrice2.toFixed(2) +
+        ' max_profit=$' + (maxSpreadValue * 100).toFixed(0));
       // Fix 4: Run monitor immediately after opening so stop loss is active right away
       setTimeout(function() { monitorTrendPositions().catch(console.error); }, 5000);
       break;
