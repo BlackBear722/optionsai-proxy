@@ -1857,12 +1857,32 @@ app.get('/api/combined-stats', async function(req, res) {
     for (var opi = 0; opi < trendOpenPos.length; opi++) {
       var op = trendOpenPos[opi];
       try {
-        var opR = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + op.ticker + '?interval=1d&range=1d', {
-          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-        });
-        var opData = await opR.json();
-        var opMeta = opData && opData.chart && opData.chart.result && opData.chart.result[0] && opData.chart.result[0].meta;
-        var currentStockPrice = opMeta && opMeta.regularMarketPrice ? parseFloat(opMeta.regularMarketPrice) : null;
+        // Try Yahoo Finance quote endpoint first (more reliable for real-time)
+        var currentStockPrice = null;
+        try {
+          var opR = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + op.ticker + '?interval=1m&range=1d', {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+          });
+          var opData = await opR.json();
+          var opMeta = opData && opData.chart && opData.chart.result && opData.chart.result[0] && opData.chart.result[0].meta;
+          currentStockPrice = opMeta && (opMeta.regularMarketPrice || opMeta.chartPreviousClose) ? parseFloat(opMeta.regularMarketPrice || opMeta.chartPreviousClose) : null;
+        } catch(fetchErr) { console.error('Price fetch error ' + op.ticker + ':', fetchErr.message); }
+
+        // Fallback: try Tradier quote if Yahoo fails
+        if (!currentStockPrice) {
+          try {
+            var session = await getState('session', null);
+            if (session) {
+              var tBase = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+              var tR = await fetch(tBase + '/markets/quotes?symbols=' + op.ticker, {
+                headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+              });
+              var tData = await tR.json();
+              var tQ = tData && tData.quotes && tData.quotes.quote;
+              if (tQ && tQ.last) currentStockPrice = parseFloat(tQ.last);
+            }
+          } catch(tErr) { console.error('Tradier price fallback error:', tErr.message); }
+        }
         if (currentStockPrice) {
           var entryStrike = parseFloat(op.strike) || currentStockPrice;
           var stockMove = currentStockPrice - entryStrike;
