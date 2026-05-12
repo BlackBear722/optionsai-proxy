@@ -2290,22 +2290,20 @@ async function buildTrendWatchlist() {
   // Broad universe of trending-friendly stocks across sectors
   // AAPL removed from trend watchlist — 2 same-day losses, options too expensive/tight
   var anchors = [
-    // Mega-cap tech
+    // Mega-cap tech — highest volume, most reliable data
     'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN',
-    // High-momentum / crypto-adjacent
-    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI', 'HOOD', 'MARA', 'RIOT',
-    // Semis & infrastructure
-    'TSM', 'AVGO', 'QCOM', 'ARM', 'ASML',
+    // High-momentum
+    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI',
+    // Semis
+    'TSM', 'AVGO', 'QCOM', 'ARM',
     // Cybersecurity & cloud
-    'PANW', 'SNOW', 'DDOG', 'APP',
+    'PANW', 'DDOG',
     // Finance
-    'JPM', 'GS', 'BAC',
-    // Healthcare
-    'LLY', 'UNH',
+    'JPM', 'GS',
     // Energy & commodities
-    'XOM', 'CVX', 'GLD',
-    // Consumer & other momentum
-    'NFLX', 'SHOP', 'CELH', 'AXON'
+    'XOM', 'GLD',
+    // Consumer momentum
+    'NFLX', 'SHOP', 'AXON'
   ];
 
   // Also add dynamic daily movers as bonus candidates
@@ -2559,6 +2557,8 @@ async function runTrendScanLogic() {
       continue;
     }
 
+    // Delay between requests to avoid Yahoo Finance rate limiting
+    await new Promise(function(res) { setTimeout(res, 600); });
     var d2 = await fetchDailyCandles(ticker);
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
