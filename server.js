@@ -2178,12 +2178,19 @@ if(checks.every(function(c){return c.m;}))document.getElementById('gl').style.di
 
 async function initTrendDB() {
   await pool.query(`CREATE TABLE IF NOT EXISTS trend_positions (
-    id SERIAL PRIMARY KEY, ticker TEXT, direction TEXT, strike NUMERIC,
+    id SERIAL PRIMARY KEY, ticker TEXT, direction TEXT, strike TEXT,
     expiry TEXT, premium NUMERIC, contracts INTEGER DEFAULT 1, order_id TEXT,
     entry_price NUMERIC, target_price NUMERIC, stop_price NUMERIC,
     status TEXT DEFAULT 'open', pnl NUMERIC, reason TEXT,
     entered_at TIMESTAMPTZ DEFAULT NOW(), exited_at TIMESTAMPTZ
   )`);
+  // Migrate strike column from NUMERIC to TEXT if needed (for spread support)
+  try {
+    await pool.query(`ALTER TABLE trend_positions ALTER COLUMN strike TYPE TEXT USING strike::TEXT`);
+    console.log('Trend DB: strike column migrated to TEXT');
+  } catch(e) {
+    // Already TEXT or migration not needed
+  }
   await pool.query(`CREATE TABLE IF NOT EXISTS trend_logs (
     id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(), type TEXT, message TEXT
   )`);
