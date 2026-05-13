@@ -1884,11 +1884,18 @@ app.get('/api/combined-stats', async function(req, res) {
           } catch(tErr) { console.error('Tradier price fallback error:', tErr.message); }
         }
         if (currentStockPrice) {
-          var entryStrike = parseFloat(op.strike) || currentStockPrice;
-          var stockMove = currentStockPrice - entryStrike;
-          var pctMove = entryStrike > 0 ? ((currentStockPrice - entryStrike) / entryStrike) : 0;
-          var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
-          if (op.direction === 'PUT') delta = -delta;
+          // Handle spread positions — strike stored as "130/120"
+          var isSpreadPos = op.direction === 'CALL_SPREAD' || op.direction === 'PUT_SPREAD';
+          var isPutPos = op.direction === 'PUT' || op.direction === 'PUT_SPREAD';
+          var strikeParts2 = String(op.strike).split('/');
+          var longStrikePos = parseFloat(strikeParts2[0]) || currentStockPrice;
+          var stockMove = currentStockPrice - longStrikePos;
+          var pctMove = longStrikePos > 0 ? ((currentStockPrice - longStrikePos) / longStrikePos) : 0;
+          // Spread delta is lower than single option
+          var delta = isSpreadPos
+            ? (pctMove > 0.03 ? 0.40 : pctMove < -0.03 ? 0.20 : 0.30)
+            : (pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50);
+          if (isPutPos) delta = -delta;
           var entryPrice = parseFloat(op.entry_price) || 0;
           var currentOptionEst = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
           var pnlNow = (currentOptionEst - entryPrice) * 100 * (op.contracts || 1);
