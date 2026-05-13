@@ -2720,18 +2720,21 @@ tb.innerHTML=D.positions.length?D.positions.map(function(p){
   var entryP=parseFloat(p.entry_price)||0;
   var targetP=parseFloat(p.target_price)||0;
   var stopP=parseFloat(p.stop_price)||0;
+  var isSpread3=p.direction==='CALL_SPREAD'||p.direction==='PUT_SPREAD';
+  var dirLabel3=isSpread3?p.direction.replace('_SPREAD',' SPD'):p.direction;
   var badge=p.status==='open'?'<span class="badge bo">Open</span>':p.status==='win'?'<span class="badge bw">Win</span>':'<span class="badge bl">Loss</span>';
   var pstr=p.status==='open'?
     '<span style="color:#888">day '+daysHeld+'</span>':
     '<span style="color:'+(pnl2>=0?'#1D9E75':'#E24B4A')+';font-weight:500">'+(pnl2>=0?'+':'')+'$'+Math.abs(pnl2).toFixed(0)+'</span>';
   var progress='';
-  if(p.status==='open' && targetP>0){
-    var pctToTarget=Math.min(100,Math.max(0,((entryP-stopP)>0?(pnl2/100/(targetP-entryP)*100):0)));
-    progress='<div style="font-size:10px;color:#666">$'+entryP.toFixed(2)+' → $'+targetP.toFixed(2)+' | stop $'+stopP.toFixed(2)+'</div>';
+  if(p.status==='open'){
+    progress=isSpread3
+      ?'<div style="font-size:10px;color:#666">strikes '+(p.strike||'')+'  net $'+entryP.toFixed(2)+'  stop $'+stopP.toFixed(2)+'  trail @40%</div>'
+      :'<div style="font-size:10px;color:#666">$'+entryP.toFixed(2)+(targetP>0?' → $'+targetP.toFixed(2):'  trail @40%')+'  stop $'+stopP.toFixed(2)+'</div>';
   } else {
     progress='<span style="color:#555;font-size:10px">'+(p.reason||'').slice(0,35)+'</span>';
   }
-  return'<div class="tr" style="grid-template-columns:70px 55px 45px 60px 70px 65px 1fr;align-items:start"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span>'+p.direction+'</span>'+badge+'<span style="color:#888;font-size:11px">$'+entryP.toFixed(2)+'</span>'+pstr+progress+'</div>';
+  return'<div class="tr" style="grid-template-columns:70px 55px 55px 60px 70px 65px 1fr;align-items:start"><span style="color:#666">'+ts+'</span><span style="font-weight:500">'+p.ticker+'</span><span style="font-size:10px">'+dirLabel3+'</span>'+badge+'<span style="color:#888;font-size:11px">$'+entryP.toFixed(2)+'</span>'+pstr+progress+'</div>';
 }).join(''):'<div style="text-align:center;color:#666;padding:20px;font-size:13px">No positions yet — scans at 10am, 12pm & 2pm ET</div>';
 document.getElementById('lb').innerHTML=D.logs.map(function(l){return'<div class="log">'+new Date(l.ts).toLocaleTimeString()+' ['+l.type+'] '+l.message+'</div>';}).join('');
 <\/script></body></html>`);
