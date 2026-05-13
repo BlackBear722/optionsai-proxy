@@ -2624,30 +2624,38 @@ async function runTrendScanLogic() {
     if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
     await trendLog(result2.confidence === 'HIGH' ? 'trade' : 'skip', 'Claude ' + ticker + ': ' + result2.signal + ' (' + result2.confidence + ') — ' + result2.reason);
     if (result2.confidence === 'HIGH') {
-      var isCall = result2.signal === 'BUY_CALL_SPREAD' || result2.signal === 'BUY_CALL';
-      var isPut = result2.signal === 'BUY_PUT_SPREAD' || result2.signal === 'BUY_PUT';
-      var direction = isCall ? 'CALL_SPREAD' : 'PUT_SPREAD';
-      var netPremium = parseFloat(result2.net_premium || result2.premium) || 2.00;
-      var longStrike = result2.long_strike || result2.strike;
-      var shortStrike = result2.short_strike || (isCall ? longStrike + 5 : longStrike - 5);
-      var spreadWidth = Math.abs(shortStrike - longStrike);
-      var maxSpreadValue = spreadWidth - netPremium;
-      var stopPrice2 = netPremium * 0.60; // hard stop at 40% loss
-      var trailActivatesAt = (netPremium * 1.40).toFixed(2);
-      var strikeStr = longStrike + '/' + shortStrike;
-      await pool.query(
-        'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-        [ticker, direction, strikeStr, result2.expiry || expiry,
-         netPremium, 1, 'PAPER-' + Date.now(), netPremium, 0, stopPrice2.toFixed(2), result2.reason]
-      );
-      await trendLog('trade', 'OPENED SPREAD: ' + ticker + ' ' + direction +
-        ' $' + longStrike + '/$' + shortStrike +
-        ' net=$' + netPremium +
-        ' trail_at=$' + trailActivatesAt +
-        ' hard_stop=$' + stopPrice2.toFixed(2) +
-        ' max_spread=$' + (maxSpreadValue * 100).toFixed(0));
-      // Fix 4: Run monitor immediately after opening so stop loss is active right away
-      setTimeout(function() { monitorTrendPositions().catch(console.error); }, 5000);
+      try {
+        var isCall = result2.signal === 'BUY_CALL_SPREAD' || result2.signal === 'BUY_CALL';
+        var isPut = result2.signal === 'BUY_PUT_SPREAD' || result2.signal === 'BUY_PUT';
+        var direction = isCall ? 'CALL_SPREAD' : 'PUT_SPREAD';
+        var netPremium = parseFloat(result2.net_premium || result2.premium) || 2.00;
+        // Use stock price as fallback for strike if Claude didn't provide it
+        var currentPrice = parseFloat(d2.price) || 100;
+        var longStrike = parseFloat(result2.long_strike || result2.strike) || Math.round(currentPrice);
+        var shortStrike = parseFloat(result2.short_strike) || (isCall ? longStrike + 10 : longStrike - 10);
+        var spreadWidth = Math.abs(shortStrike - longStrike);
+        var maxSpreadValue = spreadWidth - netPremium;
+        var stopPrice2 = netPremium * 0.60;
+        var trailActivatesAt = (netPremium * 1.40).toFixed(2);
+        var strikeStr = longStrike + '/' + shortStrike;
+        await trendLog('entry', 'Inserting: ' + ticker + ' ' + direction + ' strikes=' + strikeStr + ' net=$' + netPremium + ' expiry=' + (result2.expiry || expiry));
+        await pool.query(
+          'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+          [ticker, direction, strikeStr, result2.expiry || expiry,
+           netPremium, 1, 'PAPER-' + Date.now(), netPremium, 0, stopPrice2.toFixed(2), result2.reason]
+        );
+        await trendLog('trade', 'OPENED SPREAD: ' + ticker + ' ' + direction +
+          ' $' + longStrike + '/$' + shortStrike +
+          ' net=$' + netPremium +
+          ' trail_at=$' + trailActivatesAt +
+          ' hard_stop=$' + stopPrice2.toFixed(2) +
+          ' max_spread=$' + (maxSpreadValue * 100).toFixed(0));
+        // Run monitor immediately after opening
+        setTimeout(function() { monitorTrendPositions().catch(console.error); }, 5000);
+      } catch(insertErr) {
+        await trendLog('stop', 'ERROR inserting position for ' + ticker + ': ' + insertErr.message);
+        console.error('Position insert error:', insertErr);
+      }
       break;
     }
     await new Promise(function(r3) { setTimeout(r3, 1000); });
