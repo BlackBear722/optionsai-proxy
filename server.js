@@ -2212,14 +2212,26 @@ async function callTrendClaude(msg) {
 }
 
 async function fetchDailyCandles(ticker) {
+  // Retry logic — try up to 2 times with different user agents
+  var userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
+  ];
+  for (var attempt = 0; attempt < 2; attempt++) {
   try {
     // Fetch daily candles (3 months) for MA, RSI, trend
-    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=3mo', {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=3mo&nocache=' + Date.now(), {
+      headers: {
+        'User-Agent': userAgents[attempt],
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache'
+      }
     });
+    if (!r.ok) { await new Promise(function(res){setTimeout(res,2000);}); continue; }
     var data = await r.json();
     var res = data && data.chart && data.chart.result && data.chart.result[0];
-    if (!res) return null;
+    if (!res) { await new Promise(function(res){setTimeout(res,2000);}); continue; }
     var q = res.indicators && res.indicators.quote && res.indicators.quote[0];
     if (!q || !q.close) return null;
     var closes = q.close.filter(function(v) { return v != null && !isNaN(v); });
@@ -2282,7 +2294,12 @@ async function fetchDailyCandles(ticker) {
       distFromMa20Pct: ((price - ma20) / ma20 * 100).toFixed(2),
       nearMa20: Math.abs((price - ma20) / ma20 * 100) < 2
     };
-  } catch(e) { console.error('fetchDailyCandles ' + ticker + ':', e.message); return null; }
+  } catch(e) {
+    console.error('fetchDailyCandles ' + ticker + ' attempt ' + attempt + ':', e.message);
+    await new Promise(function(res){setTimeout(res,2000);});
+  }
+  } // end retry loop
+  return null;
 }
 
 var trendWatchCache = { date: null, tickers: [] };
@@ -2561,7 +2578,7 @@ async function runTrendScanLogic() {
     }
 
     // Delay between requests to avoid Yahoo Finance rate limiting
-    await new Promise(function(res) { setTimeout(res, 600); });
+    await new Promise(function(res) { setTimeout(res, 1500); }); // 1.5s delay to avoid Yahoo rate limiting
     var d2 = await fetchDailyCandles(ticker);
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
