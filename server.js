@@ -1898,6 +1898,12 @@ app.get('/api/combined-stats', async function(req, res) {
           op.pnlNow = pnlNow.toFixed(0);
           op.pnlPct = pnlPct.toFixed(1);
           op.daysHeld = Math.floor((Date.now() - new Date(op.entered_at)) / (1000 * 60 * 60 * 24));
+          // Trail status for dashboard
+          var entryP2 = parseFloat(op.entry_price) || 0;
+          var peakEst = Math.max(currentOptionEst, entryP2);
+          var trailActive = currentOptionEst >= entryP2 * 1.40;
+          op.trailActive = trailActive;
+          op.trailStop = trailActive ? (peakEst * 0.80).toFixed(2) : null;
         }
       } catch(opErr) { console.error('price fetch for ' + op.ticker + ':', opErr.message); }
     }
@@ -2447,7 +2453,7 @@ async function monitorTrendPositions() {
         }
         var peakPrice = trendPeakPrices[posKey];
         var peakGainPct = ((peakPrice - entryPrice) / entryPrice * 100);
-        var trailStopPrice = peakGainPct >= 50 ? peakPrice * 0.75 : null; // trail at 25% below peak once up 50%
+        var trailStopPrice = peakGainPct >= 40 ? peakPrice * 0.80 : null; // activates at 40% gain, trails 20% below peak
 
         await trendLog('entry', 'Monitor ' + pos.ticker + ' ' + pos.direction +
           ': stock=$' + currentStockPrice.toFixed(2) +
@@ -2458,25 +2464,22 @@ async function monitorTrendPositions() {
           (trailStopPrice ? ' trailStop=$' + trailStopPrice.toFixed(2) : ''));
 
         // ── Exit decisions ────────────────────────────────────────────────────
+        // No fixed profit target — let winners run via trailing stop
+        // Trail activates at 40% gain, trails 20% below peak
+        // Hard stop at 40% of premium | Expiry exit at 7 days remaining
 
-        // 1. Hard profit target: $200
-        if (pnlPerContract >= 200) {
-          await pool.query("UPDATE trend_positions SET status='win', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
-          delete trendPeakPrices[posKey];
-          await trendLog('trade', '🎯 PROFIT TARGET HIT: ' + pos.ticker + ' +$' + pnlPerContract.toFixed(0) + ' in ' + daysHeld + 'd — closing');
-          continue;
-        }
-
-        // 2. Trailing stop — once up 50%, trail at 25% below peak
+        // 1. Trailing stop — activates at 40% gain, trails 20% below peak
         if (trailStopPrice && estimatedOptionPrice <= trailStopPrice) {
           var isWin = pnlPerContract > 0;
           await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWin ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
           delete trendPeakPrices[posKey];
-          await trendLog(isWin ? 'trade' : 'stop', '📉 TRAILING STOP: ' + pos.ticker + ' ' + (isWin ? '+' : '') + '$' + pnlPerContract.toFixed(0) + ' (peak was $' + peakPrice.toFixed(2) + ')');
+          await trendLog(isWin ? 'trade' : 'stop', '📉 TRAILING STOP: ' + pos.ticker +
+            ' ' + (isWin ? '+' : '') + '$' + pnlPerContract.toFixed(0) +
+            ' (' + pnlPct + '%) peak=$' + peakPrice.toFixed(2) + ' in ' + daysHeld + 'd');
           continue;
         }
 
-        // 3. Hard stop loss: 40% of premium
+        // 2. Hard stop loss: 40% of premium paid
         var hardStop = entryPrice * 0.60;
         if (estimatedOptionPrice <= hardStop) {
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
@@ -2485,7 +2488,7 @@ async function monitorTrendPositions() {
           continue;
         }
 
-        // 4. Expiry exit — 7 days before expiry
+        // 3. Expiry exit — 7 days before expiry to avoid theta decay
         if (pos.expiry) {
           var expiryDate = new Date(pos.expiry + 'T12:00:00Z');
           var daysLeft = Math.floor((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
@@ -2604,22 +2607,21 @@ async function runTrendScanLogic() {
       var longStrike = result2.long_strike || result2.strike;
       var shortStrike = result2.short_strike || (isCall ? longStrike + 5 : longStrike - 5);
       var spreadWidth = Math.abs(shortStrike - longStrike);
-      // Target: 80% of max spread value | Stop: 50% of net premium
       var maxSpreadValue = spreadWidth - netPremium;
-      var targetPrice = netPremium + (maxSpreadValue * 0.80);
-      var stopPrice2 = netPremium * 0.50;
+      var stopPrice2 = netPremium * 0.60; // hard stop at 40% loss
+      var trailActivatesAt = (netPremium * 1.40).toFixed(2);
       var strikeStr = longStrike + '/' + shortStrike;
       await pool.query(
         'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
         [ticker, direction, strikeStr, result2.expiry || expiry,
-         netPremium, 1, 'PAPER-' + Date.now(), netPremium, targetPrice.toFixed(2), stopPrice2.toFixed(2), result2.reason]
+         netPremium, 1, 'PAPER-' + Date.now(), netPremium, 0, stopPrice2.toFixed(2), result2.reason]
       );
       await trendLog('trade', 'OPENED SPREAD: ' + ticker + ' ' + direction +
         ' $' + longStrike + '/$' + shortStrike +
         ' net=$' + netPremium +
-        ' target=$' + targetPrice.toFixed(2) +
-        ' stop=$' + stopPrice2.toFixed(2) +
-        ' max_profit=$' + (maxSpreadValue * 100).toFixed(0));
+        ' trail_at=$' + trailActivatesAt +
+        ' hard_stop=$' + stopPrice2.toFixed(2) +
+        ' max_spread=$' + (maxSpreadValue * 100).toFixed(0));
       // Fix 4: Run monitor immediately after opening so stop loss is active right away
       setTimeout(function() { monitorTrendPositions().catch(console.error); }, 5000);
       break;
