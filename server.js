@@ -2369,7 +2369,7 @@ async function buildTrendWatchlist() {
   return final;
 }
 
-// ── Trend Position Monitor — runs every 30 min during market hours ─────────
+// ── Trend Position Monitor — runs every 5 min during market hours ─────────
 // ── Gap Protection — runs at 9:05am to catch overnight gaps through stop loss ─
 async function gapProtectionCheck() {
   try {
@@ -2881,14 +2881,14 @@ pool.connect()
       // Check for trend scan every minute (only fires at scheduled times)
       setInterval(function() { runTrendScan().catch(console.error); }, 60 * 1000);
 
-      // Monitor open trend positions every 30 minutes during market hours
+      // Monitor open trend positions every 5 minutes during market hours
       setInterval(function() {
         var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
         var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
         var h = etNow.getHours();
         var minOfDay2 = etNow.getHours() * 60 + etNow.getMinutes();
         if (isWd && minOfDay2 >= 570 && minOfDay2 < 960) monitorTrendPositions().catch(console.error);
-      }, 30 * 60 * 1000);
+      }, 5 * 60 * 1000);
 
       // Gap protection — runs at 9:05am ET every weekday
       // Closes any positions that gapped through their stop loss overnight
