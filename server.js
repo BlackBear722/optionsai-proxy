@@ -341,26 +341,60 @@ async function monitorTrendPositions() {
     for (var i = 0; i < openPos.rows.length; i++) {
       var pos = openPos.rows[i];
       try {
-        // ── Fetch current stock price from Yahoo ──────────────────────────────
-        var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=5m&range=1d', {
-          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-        });
-        var data = await r.json();
-        var meta = data && data.chart && data.chart.result && data.chart.result[0] && data.chart.result[0].meta;
-        var currentStockPrice = meta && meta.regularMarketPrice ? parseFloat(meta.regularMarketPrice) : null;
-        if (!currentStockPrice) continue;
+        // ── Fetch current stock price — Tradier primary, Yahoo fallback ─────────
+        var currentStockPrice = null;
+        try {
+          var session = await getState('session', null);
+          if (session && session.token) {
+            var tBase = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+            var tqR = await fetch(tBase + '/markets/quotes?symbols=' + pos.ticker + '&greeks=false', {
+              headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+            });
+            var tqData = await tqR.json();
+            var tqQ = tqData && tqData.quotes && tqData.quotes.quote;
+            if (tqQ && (tqQ.last || tqQ.bid)) {
+              currentStockPrice = parseFloat(tqQ.last || ((tqQ.bid + tqQ.ask) / 2));
+            }
+          }
+        } catch(tradierErr) { console.error('Tradier price fetch:', tradierErr.message); }
 
-        // ── Try fetching actual option price from Yahoo ───────────────────────
+        // Yahoo fallback if Tradier fails
+        if (!currentStockPrice) {
+          try {
+            var yR = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + pos.ticker + '?interval=5m&range=1d', {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json' }
+            });
+            var yData = await yR.json();
+            var yMeta = yData && yData.chart && yData.chart.result && yData.chart.result[0] && yData.chart.result[0].meta;
+            currentStockPrice = yMeta && yMeta.regularMarketPrice ? parseFloat(yMeta.regularMarketPrice) : null;
+          } catch(yahooErr) { console.error('Yahoo price fetch:', yahooErr.message); }
+        }
+
+        if (!currentStockPrice) {
+          await trendLog('entry', 'Monitor ' + pos.ticker + ': price fetch failed — skipping this check');
+          continue;
+        }
+
+        // ── Estimate option price using delta model ───────────────────────────
         var entryPrice = parseFloat(pos.entry_price);
-        var entryStockPrice = parseFloat(pos.strike) || currentStockPrice;
-        var stockMove = currentStockPrice - entryStockPrice;
-
-        // Use a more accurate delta model:
-        // ATM options: delta ~0.5 | ITM (stock up 3%+): delta ~0.65 | OTM: delta ~0.35
-        var pctMove = entryStockPrice > 0 ? ((currentStockPrice - entryStockPrice) / entryStockPrice) : 0;
-        var delta = pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50;
-        if (pos.direction === 'PUT') delta = -delta;
-        var estimatedOptionPrice = Math.max(0.01, entryPrice + (stockMove * Math.abs(delta)));
+        var isSpreadPos = pos.direction === 'CALL_SPREAD' || pos.direction === 'PUT_SPREAD';
+        var isPutPos = pos.direction === 'PUT' || pos.direction === 'PUT_SPREAD';
+        var strikeParts = String(pos.strike).split('/');
+        var longStrikeM = parseFloat(strikeParts[0]) || currentStockPrice;
+        var shortStrikeM = strikeParts[1] ? parseFloat(strikeParts[1]) : null;
+        var spreadWidthM = shortStrikeM ? Math.abs(shortStrikeM - longStrikeM) : 0;
+        var stockMove = currentStockPrice - longStrikeM;
+        var pctMove = longStrikeM > 0 ? ((currentStockPrice - longStrikeM) / longStrikeM) : 0;
+        // Spread delta is lower — net delta ~0.30 ATM vs ~0.50 for single options
+        var delta = isSpreadPos
+          ? (pctMove > 0.03 ? 0.40 : pctMove < -0.03 ? 0.20 : 0.30)
+          : (pctMove > 0.03 ? 0.65 : pctMove < -0.03 ? 0.35 : 0.50);
+        if (isPutPos) delta = -delta;
+        var estimatedOptionPrice = entryPrice + (stockMove * Math.abs(delta));
+        if (isSpreadPos && spreadWidthM > 0) {
+          estimatedOptionPrice = Math.min(estimatedOptionPrice, spreadWidthM - 0.05);
+        }
+        estimatedOptionPrice = Math.max(0.01, estimatedOptionPrice);
 
         // ── P&L calculation ───────────────────────────────────────────────────
         var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100 * (pos.contracts || 1);
@@ -504,9 +538,9 @@ async function runTrendScanLogic() {
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
     if (d2.trend === 'FLAT') { await trendLog('skip', ticker + ' flat — no clear MA direction'); continue; }
     // Wider RSI range for trend following — elevated RSI in uptrend = momentum, not overbought
-    // RSI filter: 40-65 for trend entries — avoid extended moves and neutral zone
+    // RSI filter: 45-65 for trend entries — tightened floor to avoid weak momentum entries
     if (d2.rsi > 65) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' too extended (>65) — wait for pullback'); continue; }
-    if (d2.rsi < 20) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' extreme oversold (<20)'); continue; }
+    if (d2.rsi < 45) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' too weak (<45) — insufficient momentum'); continue; }
     if (d2.rsi >= 48 && d2.rsi <= 52) { await trendLog('skip', ticker + ' RSI ' + d2.rsi + ' in neutral zone (48-52) — no edge'); continue; }
     // SPY alignment is informational only — don't block trades that conflict with SPY
     // Best trend trades often happen in stocks moving independently of the market
