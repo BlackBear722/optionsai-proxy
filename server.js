@@ -217,6 +217,8 @@ async function buildTrendWatchlist() {
 
   // Broad universe of trending-friendly stocks across sectors
   // AAPL removed from trend watchlist — 2 same-day losses, options too expensive/tight
+  // JPM removed — consistently losing, financials too unpredictable
+  // AXON removed — weak momentum on entries, borderline RSI
   var anchors = [
     // Mega-cap tech — highest volume, most reliable data
     'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN',
@@ -226,12 +228,12 @@ async function buildTrendWatchlist() {
     'TSM', 'AVGO', 'QCOM', 'ARM',
     // Cybersecurity & cloud
     'PANW', 'DDOG',
-    // Finance
-    'JPM', 'GS',
+    // Finance — GS only (higher volatility, cleaner trends)
+    'GS',
     // Energy & commodities
     'XOM', 'GLD',
     // Consumer momentum
-    'NFLX', 'SHOP', 'AXON'
+    'NFLX', 'SHOP'
   ];
 
   // Also add dynamic daily movers as bonus candidates
@@ -563,6 +565,28 @@ async function runTrendScanLogic() {
     if (d2.weeklyTrend !== 'UNKNOWN' && d2.weeklyTrend !== 'FLAT' && d2.weeklyTrend !== d2.trend) {
       await trendLog('skip', ticker + ' daily:' + d2.trend + ' conflicts weekly:' + d2.weeklyTrend + ' — skipping');
       continue;
+    }
+
+    // Directional conviction filters — require real momentum, not mild drift
+    var weekChg = parseFloat(d2.weekChgPct) || 0;
+    if (d2.trend === 'UP') {
+      // For calls: need at least +2% weekly change to confirm upside momentum
+      if (weekChg < 2.0) {
+        await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<2%) — insufficient call momentum');
+        continue;
+      }
+    }
+    if (d2.trend === 'DOWN') {
+      // For puts: need at least -2% weekly change to confirm downside momentum
+      if (weekChg > -2.0) {
+        await trendLog('skip', ticker + ' DOWN trend but weak week chg ' + weekChg + '% (>-2%) — insufficient put momentum');
+        continue;
+      }
+      // Also require weekly RSI below 50 for puts — confirms actual selling pressure
+      if (d2.weeklyRsi > 50) {
+        await trendLog('skip', ticker + ' PUT setup but weekly RSI ' + d2.weeklyRsi + ' too high (>50) — no selling conviction');
+        continue;
+      }
     }
     // Fix 3: Require price within 8% of 20MA — avoid chasing extended moves
     var distFromMa = parseFloat(d2.distFromMa20Pct) || 0;
