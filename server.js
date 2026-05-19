@@ -505,6 +505,20 @@ async function runTrendScanLogic() {
   var openPos = await pool.query("SELECT * FROM trend_positions WHERE status='open'");
   if (openPos.rows.length >= 2) { await trendLog('skip', 'Max positions (2) reached'); return; }
 
+  // Position sizing — max 10% of available cash per trade
+  var accountBalance = await getBalance();
+  var capitalAtRisk = 0;
+  openPos.rows.forEach(function(p) { capitalAtRisk += parseFloat(p.entry_price) * 100 * (p.contracts || 1); });
+  var availableCash = accountBalance - capitalAtRisk;
+  var maxTradeCapital = availableCash * 0.10; // 10% of available cash
+  var maxPremium = Math.max(0.50, Math.min(2.50, maxTradeCapital / 100)).toFixed(2); // per share, min $0.50 max $2.50
+  await trendLog('entry', 'Position sizing: balance=$' + accountBalance.toFixed(0) + ' available=$' + availableCash.toFixed(0) + ' max_trade=$' + maxTradeCapital.toFixed(0) + ' max_premium=$' + maxPremium);
+
+  if (maxTradeCapital < 50) {
+    await trendLog('skip', 'Insufficient capital — need at least $50 to trade (available: $' + availableCash.toFixed(0) + ')');
+    return;
+  }
+
   // Fix 3: Same-ticker cooldown — don't open same ticker twice in one day
   var todayRows = await pool.query("SELECT DISTINCT ticker FROM trend_positions WHERE entered_at::date = CURRENT_DATE");
   var todayTickerList = todayRows.rows.map(function(r) { return r.ticker; });
@@ -565,7 +579,9 @@ async function runTrendScanLogic() {
       '\nWEEKLY — 10-week MA: $' + d2.weeklyMa10 + ' | RSI: ' + d2.weeklyRsi + ' | Trend: ' + d2.weeklyTrend +
       '\nNear 20MA: ' + d2.nearMa20 + ' | Week chg: ' + d2.weekChgPct + '% | Month chg: ' + (d2.monthChgPct||'N/A') + '%' +
       '\nSPY daily trend: ' + spyTrend2 +
-      '\nTarget expiry: ' + expiry + ' | Profit target: $200 | Stop: 40% of premium' +
+      '\nTarget expiry: ' + expiry +
+      '\nMAX NET PREMIUM: $' + maxPremium + ' per share (HARD LIMIT — net spread cost must not exceed this)' +
+      '\nStop: 40% of net premium. Trail stop activates at 40% gain.' +
       '\n\nUse weekly trend for conviction, daily for entry timing. Respond with TREND_RESULT.';
     var result2 = await callTrendClaude(msg);
     if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
@@ -585,7 +601,12 @@ async function runTrendScanLogic() {
         var stopPrice2 = netPremium * 0.60;
         var trailActivatesAt = (netPremium * 1.40).toFixed(2);
         var strikeStr = longStrike + '/' + shortStrike;
-        await trendLog('entry', 'Inserting: ' + ticker + ' ' + direction + ' strikes=' + strikeStr + ' net=$' + netPremium + ' expiry=' + (result2.expiry || expiry));
+        // Enforce position sizing — reject if Claude exceeded max premium
+        if (netPremium > parseFloat(maxPremium) + 0.10) { // allow 10 cent tolerance
+          await trendLog('skip', ticker + ' spread net=$' + netPremium + ' exceeds max_premium=$' + maxPremium + ' — position too large for current balance');
+          break;
+        }
+        await trendLog('entry', 'Inserting: ' + ticker + ' ' + direction + ' strikes=' + strikeStr + ' net=$' + netPremium + ' (max_allowed=$' + maxPremium + ') expiry=' + (result2.expiry || expiry));
         await pool.query(
           'INSERT INTO trend_positions (ticker,direction,strike,expiry,premium,contracts,order_id,entry_price,target_price,stop_price,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
           [ticker, direction, strikeStr, result2.expiry || expiry,
