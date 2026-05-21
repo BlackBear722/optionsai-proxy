@@ -501,6 +501,8 @@ async function runTrendScanLogic() {
     return;
   }
 
+  // Small random offset to avoid hitting Yahoo at exact scan time
+  await new Promise(function(res) { setTimeout(res, Math.floor(Math.random() * 10000)); });
   await trendLog('entry', 'Trend scan running — ' + todayStr);
 
   // Fix 2: Fetch full open position rows (not just count) for ticker checking
@@ -547,8 +549,9 @@ async function runTrendScanLogic() {
       continue;
     }
 
-    // Delay between requests to avoid Yahoo Finance rate limiting
-    await new Promise(function(res) { setTimeout(res, 1500); }); // 1.5s delay to avoid Yahoo rate limiting
+    // Randomized delay between requests to avoid Yahoo rate limiting (2-4 seconds)
+    var delay = 2000 + Math.floor(Math.random() * 2000);
+    await new Promise(function(res) { setTimeout(res, delay); });
     var d2 = await fetchDailyCandles(ticker);
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
