@@ -515,11 +515,21 @@ async function runTrendScanLogic() {
   openPos.rows.forEach(function(p) { capitalAtRisk += parseFloat(p.entry_price) * 100 * (p.contracts || 1); });
   var availableCash = accountBalance - capitalAtRisk;
   var maxTradeCapital = availableCash * 0.10; // 10% of available cash
-  var maxPremium = Math.max(0.50, Math.min(2.50, maxTradeCapital / 100)).toFixed(2); // per share, min $0.50 max $2.50
+  // Min premium $0.75 — cheaper spreads are too fragile (can go to $0.01 on small moves)
+  // Max premium $2.50 — our existing cap
+  var rawMaxPremium = maxTradeCapital / 100;
+  var maxPremium = Math.max(0.75, Math.min(2.50, rawMaxPremium)).toFixed(2);
   await trendLog('entry', 'Position sizing: balance=$' + accountBalance.toFixed(0) + ' available=$' + availableCash.toFixed(0) + ' max_trade=$' + maxTradeCapital.toFixed(0) + ' max_premium=$' + maxPremium);
 
-  if (maxTradeCapital < 50) {
-    await trendLog('skip', 'Insufficient capital — need at least $50 to trade (available: $' + availableCash.toFixed(0) + ')');
+  // Pause trading if balance drops below $400 — protect remaining capital
+  if (accountBalance < 400) {
+    await trendLog('skip', '⚠️ Balance $' + accountBalance.toFixed(0) + ' below $400 safety floor — pausing trades to protect capital');
+    return;
+  }
+
+  // Need at least $75 to open a position (min $0.75 premium × 100 shares)
+  if (maxTradeCapital < 75) {
+    await trendLog('skip', 'Insufficient capital — need at least $750 balance for min position size (current: $' + accountBalance.toFixed(0) + ')');
     return;
   }
 
