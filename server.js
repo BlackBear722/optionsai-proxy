@@ -411,7 +411,7 @@ async function monitorTrendPositions() {
         }
         var peakPrice = trendPeakPrices[posKey];
         var peakGainPct = ((peakPrice - entryPrice) / entryPrice * 100);
-        var trailStopPrice = peakGainPct >= 40 ? peakPrice * 0.80 : null; // activates at 40% gain, trails 20% below peak
+        var trailStopPrice = peakGainPct >= 25 ? peakPrice * 0.80 : null; // activates at 25% gain, trails 20% below peak
 
         await trendLog('entry', 'Monitor ' + pos.ticker + ' ' + pos.direction +
           ': stock=$' + currentStockPrice.toFixed(2) +
@@ -636,7 +636,7 @@ async function runTrendScanLogic() {
         var spreadWidth = Math.abs(shortStrike - longStrike);
         var maxSpreadValue = spreadWidth - netPremium;
         var stopPrice2 = netPremium * 0.60;
-        var trailActivatesAt = (netPremium * 1.40).toFixed(2);
+        var trailActivatesAt = (netPremium * 1.25).toFixed(2); // trail kicks in at 25% gain
         var strikeStr = longStrike + '/' + shortStrike;
         // Enforce position sizing — reject if Claude exceeded max premium
         if (netPremium > parseFloat(maxPremium) + 0.10) { // allow 10 cent tolerance
@@ -891,7 +891,7 @@ app.get('/api/combined-stats', async function(req, res) {
           // Trail status for dashboard
           var entryP2 = parseFloat(op.entry_price) || 0;
           var peakEst = Math.max(currentOptionEst, entryP2);
-          var trailActive = currentOptionEst >= entryP2 * 1.40;
+          var trailActive = currentOptionEst >= entryP2 * 1.25;
           op.trailActive = trailActive;
           op.trailStop = trailActive ? (peakEst * 0.80).toFixed(2) : null;
         }
