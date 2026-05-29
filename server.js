@@ -116,35 +116,122 @@ async function callTrendClaude(msg) {
   } catch(e) { console.error('Trend Claude error:', e.message); return null; }
 }
 
+// ── Tradier market data helper ────────────────────────────────────────────────
+async function getTradierSession() {
+  return await getState('session', null);
+}
+
 async function fetchDailyCandles(ticker) {
-  // Retry logic — try up to 2 times with different user agents
-  var userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
-  ];
-  for (var attempt = 0; attempt < 2; attempt++) {
+  // Primary: Tradier /markets/history — authenticated, no rate limits
   try {
-    // Fetch daily candles (3 months) for MA, RSI, trend
-    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=3mo&nocache=' + Date.now(), {
-      headers: {
-        'User-Agent': userAgents[attempt],
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache'
+    var session = await getTradierSession();
+    if (session && session.token) {
+      var tBase = session.isLive ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1';
+
+      // Fetch 6 months of daily history from Tradier
+      var endDate = new Date();
+      var startDate = new Date(); startDate.setMonth(startDate.getMonth() - 6);
+      var fmt = function(d) { return d.toISOString().slice(0,10); };
+
+      var histR = await fetch(tBase + '/markets/history?symbol=' + ticker + '&interval=daily&start=' + fmt(startDate) + '&end=' + fmt(endDate), {
+        headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+      });
+      var histData = await histR.json();
+      var days = histData && histData.history && histData.history.day;
+      if (!days || !Array.isArray(days) || days.length < 50) {
+        throw new Error('Insufficient Tradier history for ' + ticker + ': ' + (days ? days.length : 0) + ' days');
       }
+
+      // Also fetch current quote for real-time price
+      var quoteR = await fetch(tBase + '/markets/quotes?symbols=' + ticker + '&greeks=false', {
+        headers: { 'Authorization': 'Bearer ' + session.token, 'Accept': 'application/json' }
+      });
+      var quoteData = await quoteR.json();
+      var quote = quoteData && quoteData.quotes && quoteData.quotes.quote;
+      var currentPrice = quote ? parseFloat(quote.last || quote.bid || days[days.length-1].close) : parseFloat(days[days.length-1].close);
+
+      // Build closes array from history
+      var closes = days.map(function(d) { return parseFloat(d.close); }).filter(function(v) { return !isNaN(v); });
+
+      // Use current price as last close
+      closes[closes.length - 1] = currentPrice;
+
+      var price = currentPrice;
+      var ma20 = closes.slice(-20).reduce(function(s,v){return s+v;},0) / 20;
+      var ma50 = closes.slice(-50).reduce(function(s,v){return s+v;},0) / 50;
+
+      // RSI calculation
+      var gains = 0, tlosses = 0;
+      for (var i = closes.length - 14; i < closes.length; i++) {
+        var diff = closes[i] - closes[i-1];
+        if (diff > 0) gains += diff; else tlosses += Math.abs(diff);
+      }
+      var rsi = tlosses === 0 ? 100 : Math.round(100 - (100 / (1 + (gains/14) / (tlosses/14))));
+
+      var prevClose = closes[closes.length - 2] || price;
+      var weekAgo = closes[closes.length - 6] || price;
+      var monthAgo = closes[closes.length - 21] || price;
+
+      var trend = 'FLAT';
+      if (price > ma20 && price > weekAgo) trend = 'UP';
+      else if (price < ma20 && price < weekAgo) trend = 'DOWN';
+
+      // Derive weekly data from daily closes (every 5 trading days = 1 week)
+      var weeklyTrend = 'UNKNOWN';
+      var weeklyRsi = 50;
+      var weeklyMa10 = 0;
+      try {
+        // Sample weekly closes (every 5 days)
+        var wcloses = [];
+        for (var wi = 4; wi < closes.length; wi += 5) { wcloses.push(closes[wi]); }
+        if (wcloses.length >= 10) {
+          weeklyMa10 = wcloses.slice(-10).reduce(function(s,v){return s+v;},0) / 10;
+          var wPrice = price; // current
+          var w4ago = wcloses[wcloses.length - 4] || wPrice;
+          var wgains = 0, wlosses2 = 0;
+          for (var wj = Math.max(1, wcloses.length-14); wj < wcloses.length; wj++) {
+            var wd = wcloses[wj] - wcloses[wj-1];
+            if (wd > 0) wgains += wd; else wlosses2 += Math.abs(wd);
+          }
+          weeklyRsi = wlosses2 === 0 ? 100 : Math.round(100 - (100 / (1 + (wgains/14) / (wlosses2/14))));
+          if (wPrice > weeklyMa10 && wPrice > w4ago) weeklyTrend = 'UP';
+          else if (wPrice < weeklyMa10 && wPrice < w4ago) weeklyTrend = 'DOWN';
+          else weeklyTrend = 'FLAT';
+        }
+      } catch(we) { console.error('weekly calc ' + ticker + ':', we.message); }
+
+      return {
+        ticker: ticker, price: price.toFixed(2), ma20: ma20.toFixed(2), ma50: ma50.toFixed(2),
+        rsi: rsi, trend: trend,
+        weeklyTrend: weeklyTrend, weeklyRsi: weeklyRsi, weeklyMa10: weeklyMa10.toFixed(2),
+        chgPct: ((price - prevClose) / prevClose * 100).toFixed(2),
+        weekChgPct: ((price - weekAgo) / weekAgo * 100).toFixed(2),
+        monthChgPct: ((price - monthAgo) / monthAgo * 100).toFixed(2),
+        distFromMa20Pct: ((price - ma20) / ma20 * 100).toFixed(2),
+        nearMa20: Math.abs((price - ma20) / ma20 * 100) < 2,
+        source: 'tradier'
+      };
+    }
+  } catch(tradierErr) {
+    console.error('Tradier fetchDailyCandles ' + ticker + ':', tradierErr.message);
+  }
+
+  // Fallback: Yahoo Finance (less reliable)
+  try {
+    var r = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1d&range=3mo&nocache=' + Date.now(), {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json' }
     });
-    if (!r.ok) { await new Promise(function(res){setTimeout(res,2000);}); continue; }
+    if (!r.ok) return null;
     var data = await r.json();
     var res = data && data.chart && data.chart.result && data.chart.result[0];
-    if (!res) { await new Promise(function(res){setTimeout(res,2000);}); continue; }
+    if (!res) return null;
     var q = res.indicators && res.indicators.quote && res.indicators.quote[0];
     if (!q || !q.close) return null;
     var closes = q.close.filter(function(v) { return v != null && !isNaN(v); });
-    var volumes = (q.volume || []).filter(function(v) { return v != null; });
     if (closes.length < 50) return null;
     var price = closes[closes.length - 1];
-    var ma20 = closes.slice(-20).reduce(function(s, v) { return s + v; }, 0) / 20;
-    var ma50 = closes.slice(-50).reduce(function(s, v) { return s + v; }, 0) / 50;
+    var ma20 = closes.slice(-20).reduce(function(s,v){return s+v;},0) / 20;
+    var ma50 = closes.slice(-50).reduce(function(s,v){return s+v;},0) / 50;
     var gains = 0, tlosses = 0;
     for (var i = closes.length - 14; i < closes.length; i++) { var d = closes[i] - closes[i-1]; if (d > 0) gains += d; else tlosses += Math.abs(d); }
     var rsi = tlosses === 0 ? 100 : Math.round(100 - (100 / (1 + (gains/14) / (tlosses/14))));
@@ -154,58 +241,21 @@ async function fetchDailyCandles(ticker) {
     var trend = 'FLAT';
     if (price > ma20 && price > weekAgo) trend = 'UP';
     else if (price < ma20 && price < weekAgo) trend = 'DOWN';
-
-    // Fetch weekly candles (6 months) for multi-week trend confirmation
-    var weeklyTrend = 'UNKNOWN';
-    var weeklyRsi = 50;
-    var weeklyMa10 = 0;
-    try {
-      var rw = await fetch('https://query2.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1wk&range=6mo', {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-      });
-      var wdata = await rw.json();
-      var wres = wdata && wdata.chart && wdata.chart.result && wdata.chart.result[0];
-      var wq = wres && wres.indicators && wres.indicators.quote && wres.indicators.quote[0];
-      if (wq && wq.close) {
-        var wcloses = wq.close.filter(function(v) { return v != null && !isNaN(v); });
-        if (wcloses.length >= 10) {
-          // 10-week MA (roughly 50-day equivalent on weekly)
-          weeklyMa10 = wcloses.slice(-10).reduce(function(s, v) { return s + v; }, 0) / 10;
-          var wPrice = wcloses[wcloses.length - 1];
-          var w4ago = wcloses[wcloses.length - 5] || wPrice; // 4 weeks ago
-          // Weekly RSI
-          var wgains = 0, wlosses2 = 0;
-          for (var wi = wcloses.length - 14; wi < wcloses.length; wi++) {
-            if (wi < 1) continue;
-            var wd = wcloses[wi] - wcloses[wi-1];
-            if (wd > 0) wgains += wd; else wlosses2 += Math.abs(wd);
-          }
-          weeklyRsi = wlosses2 === 0 ? 100 : Math.round(100 - (100 / (1 + (wgains/14) / (wlosses2/14))));
-          // Weekly trend: price above 10-week MA and above where it was 4 weeks ago
-          if (wPrice > weeklyMa10 && wPrice > w4ago) weeklyTrend = 'UP';
-          else if (wPrice < weeklyMa10 && wPrice < w4ago) weeklyTrend = 'DOWN';
-          else weeklyTrend = 'FLAT';
-        }
-      }
-    } catch(we) { console.error('weekly candles ' + ticker + ':', we.message); }
-
     return {
       ticker: ticker, price: price.toFixed(2), ma20: ma20.toFixed(2), ma50: ma50.toFixed(2),
-      rsi: rsi, trend: trend,
-      weeklyTrend: weeklyTrend, weeklyRsi: weeklyRsi, weeklyMa10: weeklyMa10.toFixed(2),
+      rsi: rsi, trend: trend, weeklyTrend: 'UNKNOWN', weeklyRsi: 50, weeklyMa10: '0',
       chgPct: ((price - prevClose) / prevClose * 100).toFixed(2),
       weekChgPct: ((price - weekAgo) / weekAgo * 100).toFixed(2),
       monthChgPct: ((price - monthAgo) / monthAgo * 100).toFixed(2),
       distFromMa20Pct: ((price - ma20) / ma20 * 100).toFixed(2),
-      nearMa20: Math.abs((price - ma20) / ma20 * 100) < 2
+      nearMa20: Math.abs((price - ma20) / ma20 * 100) < 2,
+      source: 'yahoo'
     };
-  } catch(e) {
-    console.error('fetchDailyCandles ' + ticker + ' attempt ' + attempt + ':', e.message);
-    await new Promise(function(res){setTimeout(res,2000);});
-  }
-  } // end retry loop
+  } catch(e) { console.error('Yahoo fetchDailyCandles ' + ticker + ':', e.message); }
+
   return null;
 }
+
 
 var trendWatchCache = { date: null, tickers: [] };
 var trendLastScan = null;
@@ -559,9 +609,8 @@ async function runTrendScanLogic() {
       continue;
     }
 
-    // Randomized delay between requests to avoid Yahoo rate limiting (2-4 seconds)
-    var delay = 2000 + Math.floor(Math.random() * 2000);
-    await new Promise(function(res) { setTimeout(res, delay); });
+    // Small delay between tickers to be respectful of Tradier API
+    await new Promise(function(res) { setTimeout(res, 200); });
     var d2 = await fetchDailyCandles(ticker);
     if (!d2) { await trendLog('skip', ticker + ' no data'); continue; }
     await trendLog('entry', ticker + ' $' + d2.price + ' trend:' + d2.trend + ' RSI:' + d2.rsi + ' week:' + d2.weekChgPct + '%');
