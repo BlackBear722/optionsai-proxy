@@ -267,24 +267,30 @@ async function buildTrendWatchlist() {
 
   // Broad universe of trending-friendly stocks across sectors
   // AAPL removed from trend watchlist — 2 same-day losses, options too expensive/tight
-  // JPM removed — consistently losing, financials too unpredictable
-  // AXON removed — weak momentum on entries, borderline RSI
   var anchors = [
-    // Mega-cap tech — highest volume, most reliable data
-    'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN',
+    // ETFs — always liquid, clean trends, guaranteed setups
+    'SPY', 'QQQ', 'IWM', 'XLK', 'XLE', 'XLF', 'XBI',
+    // Mega-cap tech
+    'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN', 'AAPL',
     // High-momentum
-    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI',
+    'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI', 'HOOD', 'MARA',
     // Semis
-    'TSM', 'AVGO', 'QCOM', 'ARM',
+    'TSM', 'AVGO', 'QCOM', 'ARM', 'ASML',
     // Cybersecurity & cloud
-    'PANW', 'DDOG',
-    // Finance — GS only (higher volatility, cleaner trends)
-    'GS',
+    'PANW', 'DDOG', 'SNOW', 'NET',
+    // Finance
+    'GS', 'JPM', 'BAC',
+    // Healthcare & biotech
+    'LLY', 'UNH', 'MRNA',
     // Energy & commodities
-    'XOM', 'GLD',
-    // Consumer momentum
-    'NFLX', 'SHOP'
+    'XOM', 'CVX', 'GLD', 'SLV',
+    // Consumer & retail
+    'NFLX', 'SHOP', 'AMZN',
+    // Industrial & other momentum
+    'UBER', 'ABNB', 'AFRM', 'RBLX', 'SOFI'
   ];
+  // Remove duplicates
+  anchors = anchors.filter(function(v, i) { return anchors.indexOf(v) === i; });
 
   // Also add dynamic daily movers as bonus candidates
   var extras = [];
@@ -728,49 +734,41 @@ async function runTrendScanLogic() {
 }
 
 // Track which scan windows have fired today: { 'YYYY-MM-DD': { s1: bool, s2: bool, s3: bool } }
-var trendScanWindows = {};
+// Rolling 30-minute scan tracker
+var trendScansFired = {};
 
 async function runTrendScan() {
   try {
     var etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     var isWd = etNow.getDay() >= 1 && etNow.getDay() <= 5;
     var hour = etNow.getHours(), min = etNow.getMinutes();
-    if (!isWd || hour < 9 || hour >= 16) return;
+    if (!isWd) return;
 
+    // Only scan during market hours: 9:30am - 3:30pm ET
+    var minOfDay = hour * 60 + min;
+    if (minOfDay < 570 || minOfDay > 930) return;
+
+    // Fire every 30 minutes at :00 and :30
+    if (min !== 0 && min !== 30) return;
+
+    // Deduplicate — only fire once per 30-min window
+    var windowKey = etNow.toLocaleDateString('en-CA') + '-' + hour + '-' + min;
+    if (trendScansFired[windowKey]) return;
+    trendScansFired[windowKey] = true;
+
+    // Clean up old keys
     var todayStr = etNow.toLocaleDateString('en-CA');
-    if (!trendScanWindows[todayStr]) trendScanWindows[todayStr] = { s1: false, s2: false, s3: false, s4: false };
-    var w = trendScanWindows[todayStr];
+    Object.keys(trendScansFired).forEach(function(k) {
+      if (!k.startsWith(todayStr)) delete trendScansFired[k];
+    });
 
-    // Scan 1: 10:00am ET
-    if (hour === 10 && min === 0 && !w.s1) {
-      w.s1 = true;
-      await trendLog('entry', '⏰ Trend scan 1/4 — 10:00am ET');
-      await runTrendScanLogic();
-      return;
-    }
-    // Scan 2: 12:00pm ET
-    if (hour === 12 && min === 0 && !w.s2) {
-      w.s2 = true;
-      await trendLog('entry', '⏰ Trend scan 2/4 — 12:00pm ET');
-      await runTrendScanLogic();
-      return;
-    }
-    // Scan 3: 2:00pm ET
-    if (hour === 14 && min === 0 && !w.s3) {
-      w.s3 = true;
-      await trendLog('entry', '⏰ Trend scan 3/4 — 2:00pm ET');
-      await runTrendScanLogic();
-      return;
-    }
-    // Scan 4: 3:30pm ET — last window before close
-    if (hour === 15 && min === 0 && !w.s4) {
-      w.s4 = true;
-      await trendLog('entry', '⏰ Trend scan 4/4 — 3:00pm ET');
-      await runTrendScanLogic();
-      return;
-    }
+    var h12 = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
+    var timeLabel = h12 + ':' + (min === 0 ? '00' : '30') + (hour >= 12 ? 'pm' : 'am') + ' ET';
+    await trendLog('entry', '⏰ Trend scan — ' + timeLabel);
+    await runTrendScanLogic();
   } catch(e) { console.error('runTrendScan error:', e.message); }
 }
+
 
 // ── Trend Bot Routes ──────────────────────────────────────────────────────────
 
