@@ -638,16 +638,16 @@ async function runTrendScanLogic() {
     // Directional conviction filters — require real momentum, not mild drift
     var weekChg = parseFloat(d2.weekChgPct) || 0;
     if (d2.trend === 'UP') {
-      // For calls: need at least +2% weekly change to confirm upside momentum
-      if (weekChg < 2.0) {
-        await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<2%) — insufficient call momentum');
+      // For calls: need at least +1.5% weekly change to confirm upside momentum
+      if (weekChg < 1.5) {
+        await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<1.5%) — insufficient call momentum');
         continue;
       }
     }
     if (d2.trend === 'DOWN') {
-      // For puts: need at least -2% weekly change to confirm downside momentum
-      if (weekChg > -2.0) {
-        await trendLog('skip', ticker + ' DOWN trend but weak week chg ' + weekChg + '% (>-2%) — insufficient put momentum');
+      // For puts: need at least -1.5% weekly change to confirm downside momentum
+      if (weekChg > -1.5) {
+        await trendLog('skip', ticker + ' DOWN trend but weak week chg ' + weekChg + '% (>-1.5%) — insufficient put momentum');
         continue;
       }
       // Also require weekly RSI below 50 for puts — confirms actual selling pressure
