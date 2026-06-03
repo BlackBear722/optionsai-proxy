@@ -583,9 +583,9 @@ async function runTrendScanLogic() {
     return;
   }
 
-  // Need at least $75 to open a position (min $0.75 premium × 100 shares)
-  if (maxTradeCapital < 75) {
-    await trendLog('skip', 'Insufficient capital — need at least $750 balance for min position size (current: $' + accountBalance.toFixed(0) + ')');
+  // Need at least $50 to open a position (min $0.75 premium × 100 shares needs ~$75 but allow buffer)
+  if (maxTradeCapital < 50) {
+    await trendLog('skip', 'Insufficient capital — need at least $500 balance to trade (current: $' + accountBalance.toFixed(0) + ')');
     return;
   }
 
