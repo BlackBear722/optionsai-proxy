@@ -268,8 +268,8 @@ async function buildTrendWatchlist() {
   // Broad universe of trending-friendly stocks across sectors
   // AAPL removed from trend watchlist — 2 same-day losses, options too expensive/tight
   var anchors = [
-    // ETFs — always liquid, clean trends, guaranteed setups
-    'SPY', 'QQQ', 'IWM', 'XLK', 'XLE', 'XLF', 'XBI',
+    // ETFs — broad market only (sector ETFs removed — too slow/choppy)
+    'SPY', 'QQQ', 'IWM',
     // Mega-cap tech
     'NVDA', 'TSLA', 'META', 'MSFT', 'AMD', 'GOOGL', 'AMZN', 'AAPL',
     // High-momentum
@@ -512,7 +512,20 @@ async function monitorTrendPositions() {
           continue;
         }
 
-        // 3. Expiry exit — 7 days before expiry to avoid theta decay
+        // 3. Max hold time — close if negative after 3 days (not trending, free the slot)
+        if (daysHeld >= 3 && pnlPerContract < 0) {
+          await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
+          delete trendPeakPrices[posKey];
+          var entryPaidMH = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
+          await recordTransaction('TRADE_LOSS', pos.ticker,
+            'MAX HOLD ' + daysHeld + 'd: ' + pos.direction + ' — closed to free slot',
+            entryPaidMH + pnlPerContract, pos.id
+          );
+          await trendLog('stop', '⏰ MAX HOLD: ' + pos.ticker + ' negative after ' + daysHeld + 'd — closing at $' + pnlPerContract.toFixed(0) + ' to free slot');
+          continue;
+        }
+
+        // 4. Expiry exit — 7 days before expiry to avoid theta decay
         if (pos.expiry) {
           var expiryDate = new Date(pos.expiry + 'T12:00:00Z');
           var daysLeft = Math.floor((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
@@ -637,17 +650,20 @@ async function runTrendScanLogic() {
 
     // Directional conviction filters — require real momentum, not mild drift
     var weekChg = parseFloat(d2.weekChgPct) || 0;
+    // ETFs need stronger weekly momentum — they move slower than individual stocks
+    var isEtf = ['SPY','QQQ','IWM'].indexOf(ticker) >= 0;
+    var callThreshold = isEtf ? 2.5 : 1.5;
+    var putThreshold = isEtf ? -2.5 : -1.5;
+
     if (d2.trend === 'UP') {
-      // For calls: need at least +1.5% weekly change to confirm upside momentum
-      if (weekChg < 1.5) {
-        await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<1.5%) — insufficient call momentum');
+      if (weekChg < callThreshold) {
+        await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<' + callThreshold + '%) — insufficient call momentum');
         continue;
       }
     }
     if (d2.trend === 'DOWN') {
-      // For puts: need at least -1.5% weekly change to confirm downside momentum
-      if (weekChg > -1.5) {
-        await trendLog('skip', ticker + ' DOWN trend but weak week chg ' + weekChg + '% (>-1.5%) — insufficient put momentum');
+      if (weekChg > putThreshold) {
+        await trendLog('skip', ticker + ' DOWN trend but weak week chg ' + weekChg + '% (>' + putThreshold + '%) — insufficient put momentum');
         continue;
       }
       // Also require weekly RSI below 50 for puts — confirms actual selling pressure
@@ -658,7 +674,7 @@ async function runTrendScanLogic() {
     }
     // Fix 3: Require price within 8% of 20MA — avoid chasing extended moves
     var distFromMa = parseFloat(d2.distFromMa20Pct) || 0;
-    if (Math.abs(distFromMa) > 8) {
+    if (Math.abs(distFromMa) > 3) {
       await trendLog('skip', ticker + ' price ' + distFromMa.toFixed(1) + '% from 20MA — too extended, wait for pullback');
       continue;
     }
