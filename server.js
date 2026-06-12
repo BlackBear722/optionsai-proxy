@@ -360,7 +360,7 @@ async function gapProtectionCheck() {
         }
         estimatedOptionPrice = Math.max(0.01, estimatedOptionPrice);
         var pnlPerContract = (estimatedOptionPrice - entryPrice) * 100 * (pos.contracts || 1);
-        var hardStop = entryPrice * 0.60;
+        var hardStop = entryPrice * 0.75; // 25% stop loss
 
         await trendLog('entry', 'Gap check ' + pos.ticker + ': stock=$' + currentStockPrice.toFixed(2) +
           ' option~$' + estimatedOptionPrice.toFixed(2) +
@@ -467,7 +467,7 @@ async function monitorTrendPositions() {
         }
         var peakPrice = trendPeakPrices[posKey];
         var peakGainPct = ((peakPrice - entryPrice) / entryPrice * 100);
-        var trailStopPrice = peakGainPct >= 25 ? peakPrice * 0.80 : null; // activates at 25% gain, trails 20% below peak
+        var trailStopPrice = peakGainPct >= 15 ? peakPrice * 0.88 : null; // activates at 15% gain, trails 12% below peak
 
         await trendLog('entry', 'Monitor ' + pos.ticker + ' ' + pos.direction +
           ': stock=$' + currentStockPrice.toFixed(2) +
@@ -499,7 +499,7 @@ async function monitorTrendPositions() {
         }
 
         // 2. Hard stop loss: 40% of premium paid
-        var hardStop = entryPrice * 0.60;
+        var hardStop = entryPrice * 0.75; // 25% stop loss
         if (estimatedOptionPrice <= hardStop) {
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
           delete trendPeakPrices[posKey];
@@ -513,7 +513,7 @@ async function monitorTrendPositions() {
         }
 
         // 3. Max hold time — close if negative after 3 days (not trending, free the slot)
-        if (daysHeld >= 3 && pnlPerContract < 0) {
+        if (daysHeld >= 2 && pnlPerContract < 0) {
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
           delete trendPeakPrices[posKey];
           var entryPaidMH = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
@@ -706,8 +706,8 @@ async function runTrendScanLogic() {
         var shortStrike = parseFloat(result2.short_strike) || (isCall ? longStrike + 10 : longStrike - 10);
         var spreadWidth = Math.abs(shortStrike - longStrike);
         var maxSpreadValue = spreadWidth - netPremium;
-        var stopPrice2 = netPremium * 0.60;
-        var trailActivatesAt = (netPremium * 1.25).toFixed(2); // trail kicks in at 25% gain
+        var stopPrice2 = netPremium * 0.75; // hard stop at 25% loss
+        var trailActivatesAt = (netPremium * 1.15).toFixed(2); // trail kicks in at 15% gain
         var strikeStr = longStrike + '/' + shortStrike;
         // Enforce position sizing — reject if Claude exceeded max premium
         if (netPremium > parseFloat(maxPremium) + 0.10) { // allow 10 cent tolerance
@@ -954,7 +954,7 @@ app.get('/api/combined-stats', async function(req, res) {
           // Trail status for dashboard
           var entryP2 = parseFloat(op.entry_price) || 0;
           var peakEst = Math.max(currentOptionEst, entryP2);
-          var trailActive = currentOptionEst >= entryP2 * 1.25;
+          var trailActive = currentOptionEst >= entryP2 * 1.15;
           op.trailActive = trailActive;
           op.trailStop = trailActive ? (peakEst * 0.80).toFixed(2) : null;
         }
