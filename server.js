@@ -498,17 +498,22 @@ async function monitorTrendPositions() {
           continue;
         }
 
-        // 2. Hard stop loss: 40% of premium paid
+        // 2. Hard stop loss: 25% of premium paid
         var hardStop = entryPrice * 0.75; // 25% stop loss
         if (estimatedOptionPrice <= hardStop) {
+          var intendedLossPct = -25.0;
+          var actualLossPct = parseFloat(pnlPct);
+          var slippagePct = actualLossPct - intendedLossPct; // negative = exited worse than intended
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
           delete trendPeakPrices[posKey];
           var entryPaid2 = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
           await recordTransaction('TRADE_LOSS', pos.ticker,
-            'STOP LOSS: ' + pos.direction + ' closed at $' + estimatedOptionPrice.toFixed(2),
+            'STOP LOSS: ' + pos.direction + ' closed at $' + estimatedOptionPrice.toFixed(2) +
+            ' (intended -25%, actual ' + actualLossPct.toFixed(1) + '%, slippage ' + slippagePct.toFixed(1) + 'pp)',
             entryPaid2 + pnlPerContract, pos.id
           );
-          await trendLog('stop', '🛑 STOP LOSS: ' + pos.ticker + ' -$' + Math.abs(pnlPerContract).toFixed(0) + ' — closing');
+          await trendLog('stop', '🛑 STOP LOSS: ' + pos.ticker + ' -$' + Math.abs(pnlPerContract).toFixed(0) +
+            ' (intended -25%, actual ' + actualLossPct.toFixed(1) + '%, slippage ' + slippagePct.toFixed(1) + 'pp) — closing');
           continue;
         }
 
@@ -791,6 +796,112 @@ async function runTrendScan() {
 app.post('/api/resetdaily', async function(req, res) { await setState('dailyLoss', 0); res.json({ ok: true }); });
 
 // Account balance and transaction history
+// Comprehensive performance metrics: profit factor, expectancy, win rate,
+// stop-loss slippage, per-ticker breakdown, exit-type breakdown
+app.get('/api/performance', async function(req, res) {
+  try {
+    var closedRows = await pool.query(
+      "SELECT * FROM trend_positions WHERE status IN ('win','loss') ORDER BY entered_at ASC"
+    );
+    var trades = closedRows.rows;
+
+    var netPnls = trades.map(function(t) { return parseFloat(t.pnl) || 0; });
+    var wins = netPnls.filter(function(p) { return p > 0; });
+    var losses = netPnls.filter(function(p) { return p <= 0; });
+    var totalTrades = netPnls.length;
+    var winRate = totalTrades > 0 ? (wins.length / totalTrades * 100) : 0;
+    var avgWin = wins.length ? (wins.reduce(function(a,b){return a+b;},0) / wins.length) : 0;
+    var avgLoss = losses.length ? (losses.reduce(function(a,b){return a+b;},0) / losses.length) : 0;
+    var grossProfit = wins.reduce(function(a,b){return a+b;},0);
+    var grossLoss = Math.abs(losses.reduce(function(a,b){return a+b;},0));
+    var profitFactor = grossLoss > 0 ? (grossProfit / grossLoss) : null;
+    var expectancy = totalTrades > 0 ? (netPnls.reduce(function(a,b){return a+b;},0) / totalTrades) : 0;
+    var totalPnl = netPnls.reduce(function(a,b){return a+b;},0);
+
+    // Exit type breakdown (parsed from reason text since exit type isn't a separate column)
+    var exitTypes = {};
+    trades.forEach(function(t) {
+      var reason = (t.reason || '');
+      var key = t.status === 'win' && t.target_price === '0' ? 'trailing_stop'
+        : t.status === 'loss' ? 'stop_loss_or_other' : 'other';
+      // Better: derive from transaction descriptions via account_transactions
+      if (!exitTypes[key]) exitTypes[key] = { count: 0, pnl: 0 };
+      exitTypes[key].count++;
+      exitTypes[key].pnl += parseFloat(t.pnl) || 0;
+    });
+
+    // Per-ticker breakdown
+    var byTicker = {};
+    trades.forEach(function(t) {
+      var tk = t.ticker;
+      if (!byTicker[tk]) byTicker[tk] = { trades: 0, wins: 0, losses: 0, pnl: 0 };
+      byTicker[tk].trades++;
+      var p = parseFloat(t.pnl) || 0;
+      if (p > 0) byTicker[tk].wins++; else byTicker[tk].losses++;
+      byTicker[tk].pnl += p;
+    });
+    var tickerBreakdown = Object.keys(byTicker).map(function(tk) {
+      var d = byTicker[tk];
+      return {
+        ticker: tk, trades: d.trades, wins: d.wins, losses: d.losses,
+        winRate: (d.wins / d.trades * 100).toFixed(1),
+        pnl: d.pnl.toFixed(2)
+      };
+    }).sort(function(a,b) { return b.pnl - a.pnl; });
+
+    // Stop-loss slippage analysis — pull from account_transactions descriptions
+    var stopTx = await pool.query(
+      "SELECT * FROM account_transactions WHERE type='TRADE_LOSS' AND description LIKE '%STOP LOSS%' AND description LIKE '%slippage%' ORDER BY ts DESC"
+    );
+    var slippageData = stopTx.rows.map(function(tx) {
+      var match = tx.description.match(/actual (-?[\d.]+)%, slippage (-?[\d.]+)pp/);
+      return {
+        ticker: tx.ticker,
+        ts: tx.ts,
+        actualPct: match ? parseFloat(match[1]) : null,
+        slippagePp: match ? parseFloat(match[2]) : null
+      };
+    }).filter(function(s) { return s.actualPct !== null; });
+    var avgSlippage = slippageData.length
+      ? (slippageData.reduce(function(a,s){return a+s.slippagePp;},0) / slippageData.length)
+      : null;
+
+    // Market regime breakdown — using SPY trend logged at scan time isn't stored per-trade,
+    // so approximate via week-over-week direction at entry time using ticker's own trend (best available proxy)
+    var regimeBreakdown = { up: { trades: 0, pnl: 0 }, down: { trades: 0, pnl: 0 }, flat: { trades: 0, pnl: 0 } };
+    trades.forEach(function(t) {
+      var reason = (t.reason || '').toLowerCase();
+      var regime = reason.indexOf('uptrend') >= 0 ? 'up' : reason.indexOf('downtrend') >= 0 ? 'down' : 'flat';
+      regimeBreakdown[regime].trades++;
+      regimeBreakdown[regime].pnl += parseFloat(t.pnl) || 0;
+    });
+
+    res.json({
+      summary: {
+        totalTrades: totalTrades,
+        wins: wins.length,
+        losses: losses.length,
+        winRate: winRate.toFixed(1),
+        avgWin: avgWin.toFixed(2),
+        avgLoss: avgLoss.toFixed(2),
+        grossProfit: grossProfit.toFixed(2),
+        grossLoss: grossLoss.toFixed(2),
+        profitFactor: profitFactor !== null ? profitFactor.toFixed(2) : null,
+        expectancy: expectancy.toFixed(2),
+        totalPnl: totalPnl.toFixed(2)
+      },
+      stopLossSlippage: {
+        sampleSize: slippageData.length,
+        avgSlippagePp: avgSlippage !== null ? avgSlippage.toFixed(1) : null,
+        detail: slippageData
+      },
+      byTicker: tickerBreakdown,
+      byRegime: regimeBreakdown,
+      note: totalTrades < 100 ? 'Sample size is ' + totalTrades + ' trades — below the 100+ recommended for reliable statistical conclusions. Treat all metrics as directional, not definitive.' : null
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/account', async function(req, res) {
   try {
     var balance = await getBalance();
