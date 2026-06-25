@@ -93,7 +93,7 @@ async function recordTransaction(type, ticker, description, amount, positionId) 
   } catch(e) { console.error('recordTransaction error:', e.message); return null; }
 }
 
-var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts to find multi-week momentum trades. You use VERTICAL SPREADS to reduce cost and risk.\n\nTREND RULES:\n- UPTREND: Price above 20-day MA AND week change positive. Bonus if 20MA also above 50MA.\n- DOWNTREND: Price below 20-day MA AND week change negative. Bonus if 20MA below 50MA.\n- FLAT: Price chopping around 20MA with no clear weekly direction — do NOT trade.\n\nENTRY RULES:\n- BUY_CALL_SPREAD: Uptrend confirmed, RSI 40-65, price near or pulling back to 20MA.\n- BUY_PUT_SPREAD: Downtrend confirmed, RSI 35-60, price rejected at or below 20MA.\n- IDEAL entries: pullback to 20MA in uptrend (RSI 40-55), OR early breakout continuation (RSI 55-65).\n- SPY direction is context only.\n- NEVER enter RSI above 65 (too extended) or below 20 (extreme oversold).\n\nSPREAD CONSTRUCTION:\n- BUY_CALL_SPREAD: Buy ATM call + Sell call 5-10 points higher. Net cost $1.50-$2.50.\n- BUY_PUT_SPREAD: Buy ATM put + Sell put 5-10 points lower. Net cost $1.50-$2.50.\n- Expiry: 30-40 days out.\n- Max net premium: $2.50 per spread.\n- The short strike should be at a realistic target price for the trend move.\n\nEXAMPLE — Stock at $215, uptrend:\n  Buy $215 call for $3.75, Sell $225 call for $2.00 = net $1.75 cost\n  Max profit = ($225-$215-$1.75) x 100 = $825 if stock reaches $225\n  Max loss = $1.75 x 100 = $175\n\nPROFIT TARGET: 80% of max spread width (e.g. $8 wide spread targets $640). STOP LOSS: 50% of net premium paid.\n\nHIGH confidence: trend clearly established, clean pullback entry near 20MA, RSI confirms direction.\nNONE: trend unclear, RSI extreme, price too extended from 20MA, or stock just had huge move.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL_SPREAD","confidence":"HIGH","long_strike":200,"short_strike":210,"expiry":"2026-06-06","net_premium":1.75,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
+var TREND_SYSTEM = 'You are a trend-following options bot analyzing daily charts to find multi-week momentum trades. You use VERTICAL SPREADS to reduce cost and risk.\n\nTREND RULES:\n- UPTREND: Price above 20-day MA AND week change positive. Bonus if 20MA also above 50MA.\n- DOWNTREND: Price below 20-day MA AND week change negative. Bonus if 20MA below 50MA.\n- FLAT: Price chopping around 20MA with no clear weekly direction — do NOT trade.\n\nENTRY RULES:\n- BUY_CALL_SPREAD: Uptrend confirmed, RSI 40-65, price near or pulling back to 20MA.\n- BUY_PUT_SPREAD: Downtrend confirmed, RSI 35-60, price rejected at or below 20MA.\n- IDEAL entries: pullback to 20MA in uptrend (RSI 40-55), OR early breakout continuation (RSI 55-65).\n- SPY direction is context only.\n- NEVER enter RSI above 65 (too extended) or below 20 (extreme oversold).\n\nSPREAD CONSTRUCTION:\n- BUY_CALL_SPREAD: Buy ATM call + Sell call 5-10 points higher. Net cost $1.50-$2.50.\n- BUY_PUT_SPREAD: Buy ATM put + Sell put 5-10 points lower. Net cost $1.50-$2.50.\n- Expiry: 30-40 days out.\n- Max net premium: $2.50 per spread.\n- The short strike should be at a realistic target price for the trend move.\n\nEXAMPLE — Stock at $215, uptrend:\n  Buy $215 call for $3.75, Sell $225 call for $2.00 = net $1.75 cost\n  Max profit = ($225-$215-$1.75) x 100 = $825 if stock reaches $225\n  Max loss = $1.75 x 100 = $175\n\nEXIT RULES:\n- STOP LOSS: 25% of net premium paid (e.g. $1.00 entry stops at $0.75).\n- TRAILING STOP: activates at 15% gain, then follows 12% below peak price.\n- MAX HOLD: position closed automatically if still negative after 2 days.\n- No fixed profit target — trailing stop lets winners run.\n\nHIGH confidence: trend clearly established, clean pullback to 20MA (within 3%), RSI in 45-65 range, weekly momentum confirms direction.\nNONE: trend unclear, RSI extreme, price too extended from 20MA (>3%), or stock just had huge move.\n\nRespond ONLY with: <TREND_RESULT>{"ticker":"X","signal":"BUY_CALL_SPREAD","confidence":"HIGH","long_strike":200,"short_strike":210,"expiry":"2026-06-06","net_premium":1.75,"contracts":1,"reason":"brief reason"}</TREND_RESULT>';
 
 async function callTrendClaude(msg) {
   try {
@@ -479,7 +479,7 @@ async function monitorTrendPositions() {
 
         // ── Exit decisions ────────────────────────────────────────────────────
         // No fixed profit target — let winners run via trailing stop
-        // Trail activates at 40% gain, trails 20% below peak
+        // Trail activates at 15% gain, trails 12% below peak
         // Hard stop at 40% of premium | Expiry exit at 7 days remaining
 
         // 1. Trailing stop — activates at 40% gain, trails 20% below peak
@@ -694,7 +694,7 @@ async function runTrendScanLogic() {
       '\nSPY daily trend: ' + spyTrend2 +
       '\nTarget expiry: ' + expiry +
       '\nMAX NET PREMIUM: $' + maxPremium + ' per share (HARD LIMIT — net spread cost must not exceed this)' +
-      '\nStop: 40% of net premium. Trail stop activates at 40% gain.' +
+      '\nSTOP LOSS: 25% of net premium. TRAIL STOP: activates at 15% gain, trails 12% below peak. MAX HOLD: 2 days if negative. No fixed profit target.' +
       '\n\nUse weekly trend for conviction, daily for entry timing. Respond with TREND_RESULT.';
     var result2 = await callTrendClaude(msg);
     if (!result2) { await trendLog('skip', ticker + ' no Claude response'); continue; }
@@ -1213,8 +1213,8 @@ tb.innerHTML=D.positions.length?D.positions.map(function(p){
   var progress='';
   if(p.status==='open'){
     progress=isSpread3
-      ?'<div style="font-size:10px;color:#666">strikes '+(p.strike||'')+'  net $'+entryP.toFixed(2)+'  stop $'+stopP.toFixed(2)+'  trail @40%</div>'
-      :'<div style="font-size:10px;color:#666">$'+entryP.toFixed(2)+(targetP>0?' → $'+targetP.toFixed(2):'  trail @40%')+'  stop $'+stopP.toFixed(2)+'</div>';
+      ?'<div style="font-size:10px;color:#666">strikes '+(p.strike||'')+'  net $'+entryP.toFixed(2)+'  stop $'+stopP.toFixed(2)+'  trail @15%</div>'
+      :'<div style="font-size:10px;color:#666">$'+entryP.toFixed(2)+(targetP>0?' → $'+targetP.toFixed(2):'  trail @15%')+'  stop $'+stopP.toFixed(2)+'</div>';
   } else {
     progress='<span style="color:#555;font-size:10px">'+(p.reason||'').slice(0,35)+'</span>';
   }
