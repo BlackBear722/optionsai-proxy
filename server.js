@@ -387,8 +387,32 @@ async function gapProtectionCheck() {
   }
 }
 
-// In-memory peak price tracker for trend trailing stops { posId: peakOptionPrice }
+// Peak price tracker — in-memory with DB persistence to survive server restarts
 var trendPeakPrices = {};
+
+async function loadPeakPrices() {
+  try {
+    var rows = await pool.query("SELECT key, value FROM bot_state WHERE key LIKE 'peak_%'");
+    rows.rows.forEach(function(r) {
+      var posId = r.key.replace('peak_', '');
+      trendPeakPrices[posId] = parseFloat(r.value) || 0;
+    });
+    if (rows.rows.length) console.log('Loaded ' + rows.rows.length + ' peak prices from DB');
+  } catch(e) { console.error('loadPeakPrices error:', e.message); }
+}
+
+async function savePeakPrice(posId, price) {
+  try {
+    await setState('peak_' + posId, price);
+  } catch(e) { console.error('savePeakPrice error:', e.message); }
+}
+
+async function clearPeakPrice(posId) {
+  try {
+    await pool.query("DELETE FROM bot_state WHERE key=$1", ['peak_' + posId]);
+    delete trendPeakPrices[posId];
+  } catch(e) { console.error('clearPeakPrice error:', e.message); }
+}
 
 async function monitorTrendPositions() {
   try {
@@ -459,11 +483,12 @@ async function monitorTrendPositions() {
         var pnlPct = ((estimatedOptionPrice - entryPrice) / entryPrice * 100).toFixed(1);
         var daysHeld = pos.entered_at ? Math.floor((Date.now() - new Date(pos.entered_at)) / (1000 * 60 * 60 * 24)) : 0;
 
-        // ── Trailing stop — activates at +50% gain ────────────────────────────
+        // ── Trailing stop — activates at 15% gain, trails 12% below peak ────────
         var posKey = 'trend_' + pos.id;
         if (!trendPeakPrices[posKey]) trendPeakPrices[posKey] = entryPrice;
         if (estimatedOptionPrice > trendPeakPrices[posKey]) {
           trendPeakPrices[posKey] = estimatedOptionPrice;
+          await savePeakPrice(posKey, estimatedOptionPrice); // persist to DB — survives restarts
         }
         var peakPrice = trendPeakPrices[posKey];
         var peakGainPct = ((peakPrice - entryPrice) / entryPrice * 100);
@@ -478,15 +503,15 @@ async function monitorTrendPositions() {
           (trailStopPrice ? ' trailStop=$' + trailStopPrice.toFixed(2) : ''));
 
         // ── Exit decisions ────────────────────────────────────────────────────
-        // No fixed profit target — let winners run via trailing stop
+        // No fixed profit target — trailing stop only
         // Trail activates at 15% gain, trails 12% below peak
-        // Hard stop at 40% of premium | Expiry exit at 7 days remaining
+        // Hard stop: 25% of premium | Max hold: 2 days if negative
 
-        // 1. Trailing stop — activates at 40% gain, trails 20% below peak
+        // 1. Trailing stop
         if (trailStopPrice && estimatedOptionPrice <= trailStopPrice) {
           var isWin = pnlPerContract > 0;
           await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWin ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
-          delete trendPeakPrices[posKey];
+          await clearPeakPrice(posKey);
           var entryPaid = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
           await recordTransaction(isWin ? 'TRADE_WIN' : 'TRADE_LOSS', pos.ticker,
             'TRAILING STOP: ' + pos.direction + ' closed at $' + estimatedOptionPrice.toFixed(2),
@@ -505,7 +530,7 @@ async function monitorTrendPositions() {
           var actualLossPct = parseFloat(pnlPct);
           var slippagePct = actualLossPct - intendedLossPct; // negative = exited worse than intended
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
-          delete trendPeakPrices[posKey];
+          await clearPeakPrice(posKey);
           var entryPaid2 = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
           await recordTransaction('TRADE_LOSS', pos.ticker,
             'STOP LOSS: ' + pos.direction + ' closed at $' + estimatedOptionPrice.toFixed(2) +
@@ -517,10 +542,10 @@ async function monitorTrendPositions() {
           continue;
         }
 
-        // 3. Max hold time — close if negative after 3 days (not trending, free the slot)
+        // 3. Max hold time — close if negative after 2 days (not trending, free the slot)
         if (daysHeld >= 2 && pnlPerContract < 0) {
           await pool.query("UPDATE trend_positions SET status='loss', pnl=$1, exited_at=NOW() WHERE id=$2", [pnlPerContract.toFixed(2), pos.id]);
-          delete trendPeakPrices[posKey];
+          await clearPeakPrice(posKey);
           var entryPaidMH = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
           await recordTransaction('TRADE_LOSS', pos.ticker,
             'MAX HOLD ' + daysHeld + 'd: ' + pos.direction + ' — closed to free slot',
@@ -537,7 +562,7 @@ async function monitorTrendPositions() {
           if (daysLeft <= 7) {
             var isWinExp = pnlPerContract > 0;
             await pool.query("UPDATE trend_positions SET status=$1, pnl=$2, exited_at=NOW() WHERE id=$3", [isWinExp ? 'win' : 'loss', pnlPerContract.toFixed(2), pos.id]);
-            delete trendPeakPrices[posKey];
+            await clearPeakPrice(posKey);
             var entryPaid3 = parseFloat(pos.entry_price) * 100 * (pos.contracts || 1);
             await recordTransaction(isWinExp ? 'TRADE_WIN' : 'TRADE_LOSS', pos.ticker,
               'EXPIRY EXIT ' + daysLeft + 'd left: ' + pos.direction,
@@ -1275,7 +1300,9 @@ pool.connect()
         var h = etNow.getHours(), m = etNow.getMinutes();
         if (isWd && h === 9 && m >= 35 && m <= 37) gapProtectionCheck().catch(console.error);
       }, 60 * 1000);
-      console.log('Trend bot ready — scans 4x daily, monitors every 5min, gap check 9:35am ET');
+      loadPeakPrices().then(function() {
+        console.log('Trend bot ready — scans 4x daily, monitors every 5min, gap check 9:35am ET');
+      });
     }).catch(function(e) { console.error('Trend init error:', e.message); });
   })
   .catch(function(err) { console.error('Startup error:', err); process.exit(1); });
