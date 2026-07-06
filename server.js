@@ -275,7 +275,7 @@ async function buildTrendWatchlist() {
     // High-momentum
     'MSTR', 'PLTR', 'COIN', 'CRWD', 'SMCI', 'HOOD', 'MARA',
     // Semis
-    'TSM', 'AVGO', 'QCOM', 'ARM', 'ASML',
+    'TSM', 'AVGO', 'QCOM', 'ARM', 
     // Cybersecurity & cloud
     'PANW', 'DDOG', 'SNOW', 'NET',
     // Finance
@@ -524,8 +524,10 @@ async function monitorTrendPositions() {
         }
 
         // 2. Hard stop loss: 25% of premium paid
+        // Minimum 5-minute hold before stop can fire — prevents phantom stops on mispriced opens
+        var minsHeld = (Date.now() - new Date(pos.entered_at).getTime()) / (1000 * 60);
         var hardStop = entryPrice * 0.75; // 25% stop loss
-        if (estimatedOptionPrice <= hardStop) {
+        if (minsHeld >= 5 && estimatedOptionPrice <= hardStop) {
           var intendedLossPct = -25.0;
           var actualLossPct = parseFloat(pnlPct);
           var slippagePct = actualLossPct - intendedLossPct; // negative = exited worse than intended
