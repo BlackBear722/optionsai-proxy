@@ -527,7 +527,7 @@ async function monitorTrendPositions() {
         // Minimum 5-minute hold before stop can fire — prevents phantom stops on mispriced opens
         var minsHeld = (Date.now() - new Date(pos.entered_at).getTime()) / (1000 * 60);
         var hardStop = entryPrice * 0.75; // 25% stop loss
-        if (minsHeld >= 5 && estimatedOptionPrice <= hardStop) {
+        if (minsHeld >= 15 && estimatedOptionPrice <= hardStop) {
           var intendedLossPct = -25.0;
           var actualLossPct = parseFloat(pnlPct);
           var slippagePct = actualLossPct - intendedLossPct; // negative = exited worse than intended
@@ -690,6 +690,11 @@ async function runTrendScanLogic() {
     if (d2.trend === 'UP') {
       if (weekChg < callThreshold) {
         await trendLog('skip', ticker + ' UP trend but weak week chg ' + weekChg + '% (<' + callThreshold + '%) — insufficient call momentum');
+        continue;
+      }
+      // Weekly RSI cap for calls — if weekly RSI >70, stock is overbought on weekly timeframe
+      if (d2.weeklyRsi > 70) {
+        await trendLog('skip', ticker + ' weekly RSI ' + d2.weeklyRsi + ' too high (>70) for call — weekly overbought, wait for pullback');
         continue;
       }
     }
@@ -984,8 +989,10 @@ app.post('/api/bulk-close-phantoms', async function(req, res) {
 // All trend positions — last 5 days
 app.get('/api/trend-positions', async function(req, res) {
   try {
+    var days = parseInt(req.query.days) || 5;
+    var limit = parseInt(req.query.limit) || 200;
     var positions = await pool.query(
-      "SELECT * FROM trend_positions WHERE entered_at > NOW() - INTERVAL '5 days' ORDER BY entered_at DESC"
+      "SELECT * FROM trend_positions WHERE entered_at > NOW() - INTERVAL '" + days + " days' ORDER BY entered_at DESC LIMIT " + limit
     );
     var stats = await pool.query(
       "SELECT COUNT(*) FILTER (WHERE status='win') as wins, COUNT(*) FILTER (WHERE status='loss') as losses, " +
